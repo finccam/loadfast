@@ -89,39 +89,67 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
   ns_file <- file.path(path, "NAMESPACE")
   if (file.exists(ns_file)) {
     abs_path <- normalizePath(path, mustWork = TRUE)
-    nsInfo <- parseNamespaceFile(basename(abs_path), dirname(abs_path),
-                                 mustExist = FALSE)
+    nsInfo <- parseNamespaceFile(
+      basename(abs_path),
+      dirname(abs_path),
+      mustExist = FALSE
+    )
 
     # import(pkg)              -> whole-namespace import
     # importFrom(pkg, sym ...) -> selective import
     for (i in nsInfo$imports) {
-      tryCatch({
-        if (is.character(i)) {
-          # import(pkg) — import all exports
-          namespaceImport(ns_env, loadNamespace(i), from = pkg_name)
-        } else if (!is.null(i$except)) {
-          # import(pkg, except = ...) — import all except some
-          namespaceImport(ns_env, loadNamespace(i[[1L]]), from = pkg_name,
-                          except = i$except)
-        } else {
-          # importFrom(pkg, sym1, sym2, ...)
-          namespaceImportFrom(ns_env, loadNamespace(i[[1L]]), i[[2L]],
-                              from = pkg_name)
+      tryCatch(
+        {
+          if (is.character(i)) {
+            # import(pkg) — import all exports
+            namespaceImport(ns_env, loadNamespace(i), from = pkg_name)
+          } else if (!is.null(i$except)) {
+            # import(pkg, except = ...) — import all except some
+            namespaceImport(
+              ns_env,
+              loadNamespace(i[[1L]]),
+              from = pkg_name,
+              except = i$except
+            )
+          } else {
+            # importFrom(pkg, sym1, sym2, ...)
+            namespaceImportFrom(
+              ns_env,
+              loadNamespace(i[[1L]]),
+              i[[2L]],
+              from = pkg_name
+            )
+          }
+        },
+        error = function(e) {
+          warning(
+            "Import failed for ",
+            deparse(i),
+            ": ",
+            conditionMessage(e),
+            call. = FALSE
+          )
         }
-      }, error = function(e) {
-        warning("Import failed for ", deparse(i), ": ",
-                conditionMessage(e), call. = FALSE)
-      })
+      )
     }
 
     # importClassesFrom(pkg, cls1, cls2, ...)
     for (imp in nsInfo$importClasses) {
       tryCatch(
-        namespaceImportClasses(ns_env, loadNamespace(imp[[1L]]), imp[[2L]],
-                               from = pkg_name),
+        namespaceImportClasses(
+          ns_env,
+          loadNamespace(imp[[1L]]),
+          imp[[2L]],
+          from = pkg_name
+        ),
         error = function(e) {
-          warning("importClassesFrom failed for ", imp[[1L]], ": ",
-                  conditionMessage(e), call. = FALSE)
+          warning(
+            "importClassesFrom failed for ",
+            imp[[1L]],
+            ": ",
+            conditionMessage(e),
+            call. = FALSE
+          )
         }
       )
     }
@@ -129,11 +157,20 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
     # importMethodsFrom(pkg, meth1, meth2, ...)
     for (imp in nsInfo$importMethods) {
       tryCatch(
-        namespaceImportMethods(ns_env, loadNamespace(imp[[1L]]), imp[[2L]],
-                               from = pkg_name),
+        namespaceImportMethods(
+          ns_env,
+          loadNamespace(imp[[1L]]),
+          imp[[2L]],
+          from = pkg_name
+        ),
         error = function(e) {
-          warning("importMethodsFrom failed for ", imp[[1L]], ": ",
-                  conditionMessage(e), call. = FALSE)
+          warning(
+            "importMethodsFrom failed for ",
+            imp[[1L]],
+            ": ",
+            conditionMessage(e),
+            call. = FALSE
+          )
         }
       )
     }
@@ -179,8 +216,10 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
 
   # --- Attach testthat to search path ---
   uses_testthat <- local({
-    test_dirs <- c(file.path(path, "inst", "tests"),
-                   file.path(path, "tests", "testthat"))
+    test_dirs <- c(
+      file.path(path, "inst", "tests"),
+      file.path(path, "tests", "testthat")
+    )
     any(dir.exists(test_dirs)) && requireNamespace("testthat", quietly = TRUE)
   })
   if (is.null(attach_testthat)) attach_testthat <- uses_testthat
