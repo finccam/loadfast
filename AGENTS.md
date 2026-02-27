@@ -33,16 +33,18 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - DESCRIPTION is parsed only for the `Package:` field. Imports are read from the **NAMESPACE** file.
 - `load_fast()` accepts `helpers` and `attach_testthat` parameters (mirroring pkgload's `load_all`). When `helpers = TRUE` (the default) and testthat is available, it calls `testthat::source_test_helpers()` to source `helper*.R` files from `tests/testthat/` into the attached package environment — the same behavior as pkgload.
 - `attach_testthat` defaults to auto-detect: if `tests/testthat/` (or `inst/tests/`) exists and testthat is installed, testthat is attached to the search path via `library("testthat")`.
+- **`full = FALSE`** (default): allows incremental reloads. Pass `full = TRUE` to force a complete teardown+rebuild, which is needed to clean up symbols from deleted files or removed functions.
+- **`verbose = FALSE`** (default): pass `verbose = TRUE` to emit per-phase timing logs (e.g. `[load_fast] source 475 files  7.210s (cumul 7.510s)`). Useful for diagnosing performance.
 
 ## Incremental loader (loadfast_incr.R)
 
-- **`.fileCache`** is a module-level environment (`parent = emptyenv()`) keyed by `normalizePath(path)`. Each entry stores `list(ns_env, hashes, symbols)` where `hashes` is a named character vector of MD5 sums and `symbols` is a named list mapping file paths to the character vector of symbols that file contributed to the namespace.
-- **Change detection**: `tools::md5sum()` on all `R/*.R` files every call. Compared against cached hashes to classify files as changed/added/deleted.
-- **Symbol tracking**: uses `setdiff(ls(ns_env) after, ls(ns_env) before)` per file during sourcing. For re-sourced changed files, old symbols are `rm()`'d from ns_env first, then the file is re-sourced and new symbols recorded. This correctly handles functions that were removed from a file.
-- **Known limitation**: if two files define the same symbol name, the symbol is tracked under whichever file was sourced first (the `setdiff` won't pick it up for the second file). Deleting the first file would remove the symbol even though the second file also defines it. This is rare in practice.
-- **Package env sync**: after incremental re-sourcing, only symbols that were removed or added/changed are updated in the attached `package:pkg` environment (not a full wipe+recopy).
+- **`.fileCache`** is a module-level environment (`parent = emptyenv()`) keyed by `normalizePath(path)`. Each entry stores `list(ns_env, hashes)` where `hashes` is a named character vector of MD5 sums.
+- **Change detection**: `tools::md5sum()` on all `R/*.R` files every call. Compared against cached hashes to classify files as changed or added.
+- **No per-file symbol tracking**: the incremental path does **not** track which symbols came from which file, and does **not** remove stale symbols when files are deleted or functions are removed. This avoids the O(n²) `ls()` overhead that dominated load time (27.5s of 33.6s in a 475-file project). Stale symbols linger until the user calls `load_fast(path, full = TRUE)`.
+- **Package env sync**: after incremental re-sourcing, all symbols from `ns_env` are bulk-copied to the `package:pkg` environment (one `ls()` call total).
 - **Testthat helpers**: always re-sourced on every call (simple approach — there are usually only 1-2 helper files).
 - **Re-sourcing `loadfast_incr.R` itself** recreates `.fileCache`, losing all cached state. Next `load_fast()` call will do a full load. This is intentional.
+- **`full = TRUE`** bypasses the cache lookup, forcing a full teardown+rebuild. Use this after deleting files or removing functions.
 
 ## Testing gotchas
 
@@ -52,6 +54,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - Both test runners run `testthat::test_dir()` against each project's `tests/testthat/` directory after `load_fast()`, passing the attached package environment so that testthat can find the package's exported objects and helpers.
 - project2 intentionally changes behavior across all three class systems (plain functions, S4, R6) so the reload path is exercised for each. Examples: `Logger` gains a `level` field and `format_entries()` method; `Counter` gains `decrement()`; `Animal` gains an `age` slot; `summarize_values()` adds a `range` element.
 - Stage 1 → Stage 2 (project1 → project2) are **different directories**, so they always trigger full loads even in `loadfast_incr.R` (cache is keyed by abs path). The incremental path is exercised by Stage 3 in `test_loadfast_incr.R`, which copies project1 to a temp dir and mutates files in place between `load_fast()` calls.
+- Stage 3 tests verify that stale symbols **linger** after incremental reloads (expected behavior), and that `full = TRUE` properly cleans them up.
 
 ## R namespace machinery gotchas
 

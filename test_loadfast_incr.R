@@ -72,12 +72,8 @@ writeLines(c(
 
 ns3b <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
 
-check("remove-fn: summarize_values gone from namespace", quote(
-  !exists("summarize_values", envir = ns3b, inherits = FALSE)
-))
-
-check("remove-fn: summarize_values gone from pkg env", quote(
-  !exists("summarize_values", where = pkg_env_name3, inherits = FALSE)
+check("remove-fn: summarize_values lingers (no stale cleanup)", quote(
+  exists("summarize_values", envir = ns3b, inherits = FALSE)
 ))
 
 check("remove-fn: add still works", quote(
@@ -91,6 +87,17 @@ check("remove-fn: scale_vector still works", quote(
 check("remove-fn: R6 classes unaffected", quote(
   exists("Logger", envir = ns3b, inherits = FALSE) &&
   exists("Counter", envir = ns3b, inherits = FALSE)
+))
+
+# full=TRUE cleans up stale symbols
+ns3b_full <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("remove-fn: full=TRUE clears summarize_values from ns", quote(
+  !exists("summarize_values", envir = ns3b_full, inherits = FALSE)
+))
+
+check("remove-fn: full=TRUE clears summarize_values from pkg env", quote(
+  !exists("summarize_values", where = pkg_env_name3, inherits = FALSE)
 ))
 
 # ============================================================================
@@ -124,10 +131,6 @@ check("add-fn: multiply(3,4) returns 12", quote(
 
 check("add-fn: multiply visible from pkg env", quote(
   exists("multiply", where = pkg_env_name3, inherits = FALSE)
-))
-
-check("add-fn: summarize_values still gone", quote(
-  !exists("summarize_values", envir = ns3c, inherits = FALSE)
 ))
 
 check("add-fn: add still works", quote(
@@ -209,20 +212,8 @@ file.remove(file.path(tmp_dir, "R", "extras.R"))
 
 ns3f <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
 
-check("del-file: negate gone from namespace", quote(
-  !exists("negate", envir = ns3f, inherits = FALSE)
-))
-
-check("del-file: negate gone from pkg env", quote(
-  !exists("negate", where = pkg_env_name3, inherits = FALSE)
-))
-
-check("del-file: double gone from namespace", quote(
-  !exists("double", envir = ns3f, inherits = FALSE)
-))
-
-check("del-file: double gone from pkg env", quote(
-  !exists("double", where = pkg_env_name3, inherits = FALSE)
+check("del-file: negate lingers (no stale cleanup)", quote(
+  exists("negate", envir = ns3f, inherits = FALSE)
 ))
 
 check("del-file: add still works", quote(
@@ -234,6 +225,29 @@ check("del-file: R6 classes still work", quote({
   ctr$increment(by = 3L)
   ctr$value == 3L
 }))
+
+# full=TRUE cleans up stale symbols from deleted file
+ns3f_full <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("del-file: full=TRUE clears negate from ns", quote(
+  !exists("negate", envir = ns3f_full, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears double from ns", quote(
+  !exists("double", envir = ns3f_full, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears negate from pkg env", quote(
+  !exists("negate", where = pkg_env_name3, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears double from pkg env", quote(
+  !exists("double", where = pkg_env_name3, inherits = FALSE)
+))
+
+check("del-file: full=TRUE add still works", quote(
+  get("add", envir = ns3f_full)(1, 2) == 1003
+))
 
 # ============================================================================
 # Summary (inherited counters from test_checks.R)
