@@ -1,0 +1,2 @@
+importFrom(rlang, ns_registry_env)
+import(methods)

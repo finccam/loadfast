@@ -1,18 +1,33 @@
 # AGENTS.md — Non-obvious context for working in this repo
 
+# Hygiene
+
+This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!! (delete obvious information)
+
+# Coding guidelines
+
+* Do not write organizational or comments that summarize the code. Comments should only be written in order to explain "why" the code is written in some way in the case there is a reason that is tricky / non-obvious.
+* Prefer implementing functionality in existing files unless it is a new logical component. Avoid creating many small files.
+
 ## Project layout
 
-- **`pkgload/`** contains the original pkgload R package source code (moved here for reference). This is NOT the active `R/` directory.
-- **`R/`** is an empty scratch folder for dummy test code. It is NOT the pkgload package source.
 - **`loadfast.R`** (top-level) is the standalone replacement for `devtools::load_all()`. It is independent of the pkgload package and is designed to be copied into the user's own project.
-- **`DESCRIPTION`** (top-level) is a standard R package DESCRIPTION file. `loadfast.R` reads the `Package:` field from it to determine the package name.
-- **`NAMESPACE`** (top-level) declares namespace imports (e.g. `import(rlang)`, `import(methods)`).
+- **`test_loadfast.R`** (top-level) is the test harness. Run with `Rscript test_loadfast.R` from the `loadfast/` directory.
+- **`project1/`** and **`project2/`** are frozen package snapshots used by the tests. Each contains `DESCRIPTION`, `NAMESPACE`, and `R/` with source files. Both have the **same `Package: devpackage`** name — this is intentional (see testing section below).
+- **`pkgload/`** contains the original pkgload R package source code (moved here for reference). It is NOT used at runtime.
 
 ## loadfast.R design decisions
 
 - The package name is **read from the `Package:` field in DESCRIPTION**. No hard-coding required — just set the field in your DESCRIPTION file.
+- `load_fast(path)` takes a **path to a package root** (a directory containing `DESCRIPTION`, `NAMESPACE`, and `R/`). It does not assume `.`.
 - Requires **`rlang`** as a runtime dependency (for `rlang::ns_registry_env()`). The user already has it because they use devtools.
 - DESCRIPTION is parsed only for the `Package:` field. Imports are read from the **NAMESPACE** file.
+
+## Testing gotchas
+
+- Both project snapshots must declare the **same `Package:` name**. If they differ, `load_fast()` would load two independent packages and the detach/unregister/rebuild path would never be exercised.
+- Both NAMESPACE files are currently **identical**. The test does not yet cover NAMESPACE changes across reloads.
+- The `check()` helper wraps test expressions in `quote()` and evaluates with `eval(..., envir = parent.frame())`. Without `quote()`, errors from the assertion itself would escape `tryCatch`.
 
 ## R namespace machinery gotchas
 
@@ -31,6 +46,9 @@ R's `registerNamespace` is an `.Internal` and cannot be called from user code. T
 On R 4.2.2 (and possibly other versions), `methods:::matchSignature` emits the "no definition for class" notice via `message()`, **not** `warning()`. This means `suppressWarnings()` does NOT suppress it — you need `suppressMessages()` or a `withCallingHandlers` that catches **both** `warning` and `message` conditions. This was discovered empirically; the decompiled source appears to show `warning()` but the runtime behavior is `message()`.
 
 These notices are **harmless**. They fire when `setMethod()` is sourced before the corresponding `setClass()` due to alphabetical file ordering. The methods still register correctly. Installed packages never hit this because they load from pre-compiled lazy-load databases (no re-execution of `setClass`/`setMethod`).
+
+### S4 class redefinition on reload requires full unregister
+When reloading a package that redefines an S4 class (e.g. adding a slot), the old class definition must be fully evicted first. This works in `loadfast.R` because the reload path calls `unloadNamespace()` (or force-removes from the registry), which clears the methods package's internal class cache. Without this, `setClass()` would see the old definition and the new slot would silently fail to appear.
 
 ### `parseNamespaceFile` path convention
 `parseNamespaceFile(package, package.lib)` constructs the path as `<package.lib>/<package>/NAMESPACE`. So to parse `./NAMESPACE` you must call:

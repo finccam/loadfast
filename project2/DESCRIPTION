@@ -1,0 +1,13 @@
+Package: devpackage
+Title: Dev Package for Testing loadfast
+Version: 0.0.1
+Authors@R: person("Dev", "User", email = "dev@example.com", role = c("aut", "cre"))
+Description: A placeholder development package used for testing the loadfast
+    standalone loader.
+License: MIT
+Depends:
+    R (>= 4.0)
+Imports:
+    rlang,
+    data.table
+Encoding: UTF-8
