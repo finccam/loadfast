@@ -177,8 +177,20 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
       )
     }
 
-    # Store the parsed imports in namespace metadata
-    setNamespaceInfo(ns_env, "imports", nsInfo$imports)
+    # Convert raw parseNamespaceFile output to the canonical named-list format
+    # that getNamespaceImports() consumers expect (e.g. data.table's cedta()).
+    imports_canonical <- list(base = TRUE)
+    for (i in nsInfo$imports) {
+      if (is.character(i)) {
+        imports_canonical[[i]] <- TRUE
+      } else {
+        pkg <- i[[1L]]
+        syms <- i[[2L]]
+        if (isTRUE(imports_canonical[[pkg]])) next
+        imports_canonical[[pkg]] <- c(imports_canonical[[pkg]], syms)
+      }
+    }
+    setNamespaceInfo(ns_env, "imports", imports_canonical)
   }
 
   # --- Source all R files into the namespace ---
@@ -236,6 +248,13 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
   nms <- ls(ns_env, all.names = FALSE)
   for (nm in nms) {
     assign(nm, get(nm, envir = ns_env), envir = pkg_env)
+  }
+
+  # Copy imported symbols (from importFrom/import directives in NAMESPACE) into
+  # the package env so they're available for interactive use on the search path.
+  imp_nms <- ls(impenv, all.names = TRUE)
+  for (nm in imp_nms) {
+    assign(nm, get(nm, envir = impenv, inherits = FALSE), envir = pkg_env)
   }
 
   # --- Source testthat helpers into pkg env ---

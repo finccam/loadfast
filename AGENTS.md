@@ -17,12 +17,12 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - **`test_loadfast.R`** — thin wrapper: sources `loadfast.R` then `test_checks.R`, then prints summary.
 - **`test_loadfast_incr.R`** — thin wrapper: sources `loadfast_incr.R` then `test_checks.R`, then runs Stage 3 (incremental-specific tests using a temp copy of project1: no-change, function removal, function addition, function modification, new file, file deletion), then prints summary.
 - **`project1/`** and **`project2/`** are frozen package snapshots used by the tests. Each contains `DESCRIPTION`, `NAMESPACE`, `R/` (source files), and `tests/testthat/` (testthat tests + helpers). Both have the **same `Package: devpackage`** name — this is intentional (see testing section below).
-  - `R/base.R` — plain functions (`add`, `scale_vector`, `summarize_values`)
+  - `R/base.R` — plain functions (`add`, `scale_vector`, `summarize_values`, `mutate_dt`) — `mutate_dt` exercises `data.table`'s `:=` and `as.data.table` via `importFrom`
   - `R/s4_classes.R` — S4 classes (`Animal`, `Pet`), generics, methods
   - `R/r6_classes.R` — R6 classes (`Logger`, `Counter`)
   - `tests/testthat/helper-utils.R` — testthat helper factories (`make_test_animal`, `make_test_logger`)
   - `tests/testthat/test-base.R` — testthat tests exercising all of the above
-- **`renv/`** and **`renv.lock`** manage the project-local library. Key packages: `testthat`, `R6`, `rlang`.
+- **`renv/`** and **`renv.lock`** manage the project-local library. Key packages: `testthat`, `R6`, `rlang`, `data.table`.
 - **`pkgload/`** contains the original pkgload R package source code (moved here for reference). It is NOT used at runtime.
 
 ## Shared design decisions (loadfast.R and loadfast_incr.R)
@@ -86,6 +86,12 @@ NOT `parseNamespaceFile(pkg_name, ".")` — that would look for `./<pkg_name>/NA
 
 ### `namespaceImport` / `namespaceImportFrom` target the **imports env**
 These base R functions place objects into the **parent** of the namespace env (the `imports:<pkg>` env), not into the namespace itself. This is correct R semantics — the namespace inherits from the imports env.
+
+### Imports metadata must be stored in canonical named-list format
+`parseNamespaceFile()` returns `$imports` as a flat list of unnamed elements (strings for `import()`, two-element lists for `importFrom()`). But `getNamespaceImports(ns)` consumers — notably **data.table's `cedta()`** — expect a **named list** keyed by package name, where values are `TRUE` (whole-namespace import) or a character vector of symbol names. If you store the raw parse output, `cedta()` won't find `"data.table"` in `names(getNamespaceImports(ns))` and will error with *"environment that is not data.table-aware"* when `:=` is used inside `[.data.table`. The loaders convert to canonical format before calling `setNamespaceInfo(ns_env, "imports", ...)`.
+
+### Imported symbols must be copied to the attached package env
+`namespaceImportFrom` places symbols in the imports env (parent of ns_env). Code *inside* the namespace finds them via the parent chain, but they are not in `ls(ns_env)`. To make them available for interactive use on the search path (matching `devtools::load_all()` behavior), the loaders also copy all symbols from the imports env into the `package:` env.
 
 ## System-specific notes
 

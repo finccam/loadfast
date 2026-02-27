@@ -81,6 +81,11 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     for (nm in nms) {
       assign(nm, get(nm, envir = ns_env, inherits = FALSE), envir = pkg_env)
     }
+    impenv <- parent.env(ns_env)
+    imp_nms <- ls(impenv, all.names = TRUE)
+    for (nm in imp_nms) {
+      assign(nm, get(nm, envir = impenv, inherits = FALSE), envir = pkg_env)
+    }
     .timer("incr pkg_env sync")
 
     .fileCache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
@@ -183,7 +188,18 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       )
       .timer(paste0("  importMethods: ", imp[[1L]], " [", paste(imp[[2L]], collapse=","), "]"))
     }
-    setNamespaceInfo(ns_env, "imports", nsInfo$imports)
+    imports_canonical <- list(base = TRUE)
+    for (i in nsInfo$imports) {
+      if (is.character(i)) {
+        imports_canonical[[i]] <- TRUE
+      } else {
+        pkg <- i[[1L]]
+        syms <- i[[2L]]
+        if (isTRUE(imports_canonical[[pkg]])) next
+        imports_canonical[[pkg]] <- c(imports_canonical[[pkg]], syms)
+      }
+    }
+    setNamespaceInfo(ns_env, "imports", imports_canonical)
   }
 
   old_tle <- getOption("topLevelEnvironment")
@@ -210,6 +226,10 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   nms <- ls(ns_env, all.names = FALSE)
   for (nm in nms) {
     assign(nm, get(nm, envir = ns_env), envir = pkg_env)
+  }
+  imp_nms <- ls(impenv, all.names = TRUE)
+  for (nm in imp_nms) {
+    assign(nm, get(nm, envir = impenv, inherits = FALSE), envir = pkg_env)
   }
   .timer("attach pkg to search path")
 

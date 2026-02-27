@@ -70,6 +70,31 @@ check("R6Class is in imports env", quote(
   exists("R6Class", envir = impenv, inherits = FALSE)
 ))
 
+# --- importFrom(data.table, ...) ---
+check(":= is in imports env", quote(
+  exists(":=", envir = impenv, inherits = FALSE)
+))
+
+check("as.data.table is in imports env", quote(
+  exists("as.data.table", envir = impenv, inherits = FALSE)
+))
+
+check("data.table is in imports env", quote(
+  exists("data.table", envir = impenv, inherits = FALSE)
+))
+
+check(":= is exposed in attached pkg env", quote(
+  exists(":=", where = "package:devpackage", inherits = FALSE)
+))
+
+check("as.data.table is exposed in attached pkg env", quote(
+  exists("as.data.table", where = "package:devpackage", inherits = FALSE)
+))
+
+check("data.table is exposed in attached pkg env", quote(
+  exists("data.table", where = "package:devpackage", inherits = FALSE)
+))
+
 # --- base.R functions ---
 check("add() exists in namespace", quote(
   exists("add", envir = ns, inherits = FALSE)
@@ -95,6 +120,23 @@ check("summarize_values() returns mean, sd, n", quote({
   s <- get("summarize_values", envir = ns)(c(2, 4, 6))
   s$mean == 4 && s$n == 3 && is.numeric(s$sd) && is.null(s$range)
 }))
+
+# --- mutate_dt: data.table := inside package code ---
+check("mutate_dt() exists in namespace", quote(
+  exists("mutate_dt", envir = ns, inherits = FALSE)
+))
+
+check("mutate_dt() returns a data.table with := column", quote({
+  dt <- get("mutate_dt", envir = ns)(c(1, 2, 3), times = 10L)
+  data.table::is.data.table(dt) &&
+    identical(dt$val, c(1, 2, 3)) &&
+    identical(dt$scaled, c(10, 20, 30)) &&
+    ncol(dt) == 2L
+}))
+
+check("mutate_dt() is visible from attached env", quote(
+  exists("mutate_dt", where = "package:devpackage", inherits = FALSE)
+))
 
 # --- S4 classes ---
 check("Animal class is defined", quote(
@@ -305,6 +347,16 @@ check("scale_vector() now centers before scaling", quote(
 check("summarize_values() now includes range", quote({
   s <- get("summarize_values", envir = ns2)(c(2, 4, 6))
   s$mean == 4 && identical(s$range, c(2, 6))
+}))
+
+# --- mutate_dt: project2 adds a rank column ---
+check("mutate_dt() now returns 3 columns with rnk", quote({
+  dt <- get("mutate_dt", envir = ns2)(c(30, 10, 20), times = 2L)
+  data.table::is.data.table(dt) &&
+    identical(dt$val, c(30, 10, 20)) &&
+    identical(dt$scaled, c(60, 20, 40)) &&
+    identical(dt$rnk, c(3, 1, 2)) &&
+    ncol(dt) == 3L
 }))
 
 # --- S4 classes updated ---
