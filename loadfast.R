@@ -4,6 +4,8 @@
 # Requires: rlang (for namespace registry access)
 # Usage: source("loadfast.R"); load_fast()
 
+message("attaching load_fast function")
+
 load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
   # --- Read package name from DESCRIPTION ---
   desc_path <- file.path(path, "DESCRIPTION")
