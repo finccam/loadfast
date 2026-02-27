@@ -1,2 +1,3 @@
 importFrom(rlang, ns_registry_env)
 import(methods)
+importFrom(R6, R6Class)

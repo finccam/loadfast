@@ -72,11 +72,12 @@ check("setClass is in imports env (from methods)", quote(
   exists("setClass", envir = impenv, inherits = FALSE)
 ))
 
-check("setMethod is in imports env (from methods)", quote(
-  exists("setMethod", envir = impenv, inherits = FALSE)
+# --- importFrom(R6, R6Class) ---
+check("R6Class is in imports env", quote(
+  exists("R6Class", envir = impenv, inherits = FALSE)
 ))
 
-# --- add() from R/script.R ---
+# --- base.R functions ---
 check("add() exists in namespace", quote(
   exists("add", envir = ns, inherits = FALSE)
 ))
@@ -92,6 +93,15 @@ check("add(-1, 1) returns 0", quote(
 check("add() is visible from attached env", quote(
   exists("add", where = "package:devpackage", inherits = FALSE)
 ))
+
+check("scale_vector(1:3, 2) returns c(2,4,6)", quote(
+  identical(get("scale_vector", envir = ns)(1:3, factor = 2), c(2, 4, 6))
+))
+
+check("summarize_values() returns mean, sd, n", quote({
+  s <- get("summarize_values", envir = ns)(c(2, 4, 6))
+  s$mean == 4 && s$n == 3 && is.numeric(s$sd) && is.null(s$range)
+}))
 
 # --- S4 classes ---
 check("Animal class is defined", quote(
@@ -164,6 +174,108 @@ check("greet(Pet) works", quote(
   get("greet", envir = ns)(p1) == "Hello! My name is Milo and I belong to Alice"
 ))
 
+# --- R6 classes ---
+check("Logger R6 generator exists in namespace", quote(
+  exists("Logger", envir = ns, inherits = FALSE)
+))
+
+check("Counter R6 generator exists in namespace", quote(
+  exists("Counter", envir = ns, inherits = FALSE)
+))
+
+lg1 <- get("Logger", envir = ns)$new()
+
+check("Logger$new() creates empty logger", quote(
+  lg1$size() == 0L
+))
+
+check("Logger$last() returns NA on empty", quote(
+  identical(lg1$last(), NA_character_)
+))
+
+lg1$log("hello")
+lg1$log("world")
+
+check("Logger$log() appends entries", quote(
+  lg1$size() == 2L
+))
+
+check("Logger$last() returns last entry", quote(
+  lg1$last() == "world"
+))
+
+check("Logger entries are plain (no level prefix in project1)", quote(
+  identical(lg1$entries, c("hello", "world"))
+))
+
+ctr1 <- get("Counter", envir = ns)$new()
+
+check("Counter$new() starts at 0", quote(
+  ctr1$value == 0L
+))
+
+ctr1$increment()
+ctr1$increment(by = 5L)
+
+check("Counter$increment() accumulates", quote(
+  ctr1$value == 6L
+))
+
+ctr1$reset()
+
+check("Counter$reset() zeroes out", quote(
+  ctr1$value == 0L
+))
+
+check("Counter does NOT have decrement yet", quote(
+  is.null(ctr1$decrement)
+))
+
+# --- testthat helpers sourced into pkg env ---
+check("testthat is on the search path", quote(
+  "package:testthat" %in% search()
+))
+
+check("make_test_animal() is in attached pkg env", quote(
+  exists("make_test_animal", where = "package:devpackage", inherits = FALSE)
+))
+
+check("make_test_logger() is in attached pkg env", quote(
+  exists("make_test_logger", where = "package:devpackage", inherits = FALSE)
+))
+
+th_animal <- get("make_test_animal", pos = "package:devpackage")()
+th_logger <- get("make_test_logger", pos = "package:devpackage")()
+
+check("make_test_animal() returns an Animal", quote(
+  is(th_animal, "Animal")
+))
+
+check("make_test_animal() has correct name", quote(
+  th_animal@name == "TestAnimal"
+))
+
+check("make_test_logger() returns a Logger with one entry", quote(
+  th_logger$size() == 1L && th_logger$last() == "init"
+))
+
+# --- Run testthat suite for project1 ---
+cat("\n--- Running testthat::test_dir() for project1 ---\n\n")
+tt_results1 <- testthat::test_dir(
+  file.path("project1", "tests", "testthat"),
+  env = as.environment("package:devpackage"),
+  stop_on_failure = FALSE
+)
+tt_df1 <- as.data.frame(tt_results1)
+n_tt_fail1 <- sum(tt_df1$failed)
+n_tt_pass1 <- sum(tt_df1$passed)
+
+check("testthat project1: all tests pass", quote(
+  n_tt_fail1 == 0L
+))
+
+cat(sprintf("  (testthat project1: %d passed, %d failed)\n", n_tt_pass1, n_tt_fail1))
+
 # ============================================================================
 # STAGE 2: Reload with project2 (same package name, changed code)
 # ============================================================================
@@ -184,7 +296,7 @@ check("package:devpackage is still on the search path", quote(
   "package:devpackage" %in% search()
 ))
 
-# --- add() changed behavior ---
+# --- base.R changed behavior ---
 check("add(2, 3) now returns 105", quote(
   get("add", envir = ns2)(2, 3) == 105
 ))
@@ -193,9 +305,14 @@ check("add(0, 0) now returns 100", quote(
   get("add", envir = ns2)(0, 0) == 100
 ))
 
-check("add(-1, 1) now returns 100", quote(
-  get("add", envir = ns2)(-1, 1) == 100
+check("scale_vector() now centers before scaling", quote(
+  identical(get("scale_vector", envir = ns2)(c(1, 3), factor = 1), c(-1, 1))
 ))
+
+check("summarize_values() now includes range", quote({
+  s <- get("summarize_values", envir = ns2)(c(2, 4, 6))
+  s$mean == 4 && identical(s$range, c(2, 6))
+}))
 
 # --- S4 classes updated ---
 check("Animal class still exists", quote(
@@ -262,6 +379,74 @@ check("speak(Animal) works", quote(
 check("speak(Pet) works", quote(
   get("speak", envir = ns2)(p2) == "Meowster says hello to Alice"
 ))
+
+# --- R6 classes updated ---
+lg2 <- get("Logger", envir = ns2)$new("WARN")
+
+check("Logger now accepts a level argument", quote(
+  lg2$level == "WARN"
+))
+
+lg2$log("problem")
+
+check("Logger$log() now prefixes with level", quote(
+  lg2$last() == "[WARN] problem"
+))
+
+lg2$log("another")
+
+check("Logger$format_entries() is new in project2", quote(
+  !is.null(lg2$format_entries) && lg2$format_entries() == "[WARN] problem\n[WARN] another"
+))
+
+ctr2 <- get("Counter", envir = ns2)$new(10L)
+
+check("Counter$new(10) starts at 10", quote(
+  ctr2$value == 10L
+))
+
+ctr2$decrement(by = 3L)
+
+check("Counter$decrement() is new in project2", quote(
+  ctr2$value == 7L
+))
+
+# --- testthat helpers updated after reload ---
+th_animal2 <- get("make_test_animal", pos = "package:devpackage")()
+th_logger2 <- get("make_test_logger", pos = "package:devpackage")()
+
+check("make_test_animal() returns updated Animal", quote(
+  is(th_animal2, "Animal") && th_animal2@name == "TestAnimal2"
+))
+
+check("make_test_animal() Animal has age slot from project2", quote(
+  th_animal2@age == 2
+))
+
+check("make_test_logger() now uses DEBUG level", quote(
+  th_logger2$level == "DEBUG"
+))
+
+check("make_test_logger() entry is prefixed with level", quote(
+  th_logger2$last() == "[DEBUG] init"
+))
+
+# --- Run testthat suite for project2 ---
+cat("\n--- Running testthat::test_dir() for project2 ---\n\n")
+tt_results2 <- testthat::test_dir(
+  file.path("project2", "tests", "testthat"),
+  env = as.environment("package:devpackage"),
+  stop_on_failure = FALSE
+)
+tt_df2 <- as.data.frame(tt_results2)
+n_tt_fail2 <- sum(tt_df2$failed)
+n_tt_pass2 <- sum(tt_df2$passed)
+
+check("testthat project2: all tests pass", quote(
+  n_tt_fail2 == 0L
+))
+
+cat(sprintf("  (testthat project2: %d passed, %d failed)\n", n_tt_pass2, n_tt_fail2))
 
 # ============================================================================
 # Summary

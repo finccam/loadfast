@@ -9,5 +9,6 @@ Depends:
     R (>= 4.0)
 Imports:
     rlang,
-    data.table
+    data.table,
+    R6
 Encoding: UTF-8

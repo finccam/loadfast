@@ -4,7 +4,7 @@
 # Requires: rlang (for namespace registry access)
 # Usage: source("loadfast.R"); load_fast()
 
-load_fast <- function(path = ".") {
+load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
   # --- Read package name from DESCRIPTION ---
   desc_path <- file.path(path, "DESCRIPTION")
   if (!file.exists(desc_path)) {
@@ -177,6 +177,17 @@ load_fast <- function(path = ".") {
     )
   }
 
+  # --- Attach testthat to search path ---
+  uses_testthat <- local({
+    test_dirs <- c(file.path(path, "inst", "tests"),
+                   file.path(path, "tests", "testthat"))
+    any(dir.exists(test_dirs)) && requireNamespace("testthat", quietly = TRUE)
+  })
+  if (is.null(attach_testthat)) attach_testthat <- uses_testthat
+  if (isTRUE(attach_testthat) && pkg_name != "testthat") {
+    library("testthat", warn.conflicts = FALSE)
+  }
+
   # --- Attach to search path so objects are visible ---
   pkg_env <- attach(NULL, name = pkg_env_name)
 
@@ -184,6 +195,20 @@ load_fast <- function(path = ".") {
   nms <- ls(ns_env, all.names = FALSE)
   for (nm in nms) {
     assign(nm, get(nm, envir = ns_env), envir = pkg_env)
+  }
+
+  # --- Source testthat helpers into pkg env ---
+  if (isTRUE(helpers) && uses_testthat) {
+    test_dir <- file.path(path, "tests", "testthat")
+    if (!dir.exists(test_dir)) test_dir <- file.path(path, "inst", "tests")
+    if (dir.exists(test_dir)) {
+      old_not_cran <- Sys.getenv("NOT_CRAN", unset = NA)
+      Sys.setenv(NOT_CRAN = "true")
+      on.exit({
+        if (is.na(old_not_cran)) Sys.unsetenv("NOT_CRAN") else Sys.setenv(NOT_CRAN = old_not_cran)
+      }, add = TRUE)
+      testthat::source_test_helpers(test_dir, env = pkg_env)
+    }
   }
 
   message("Loaded ", length(r_files), " file(s) from ", r_dir)
