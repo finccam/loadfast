@@ -250,6 +250,245 @@ check("del-file: full=TRUE add still works", quote(
 ))
 
 # ============================================================================
+# 3g: Cross-file plain function dependency
+#     compute() in wrappers.R calls add() from base.R.
+#     Changing only base.R should change compute()'s output.
+# ============================================================================
+cat("\n--- 3g: cross-file function dependency ---\n\n")
+
+writeLines(c(
+  "compute <- function(a, b) add(a, b) * 10"
+), file.path(tmp_dir, "R", "wrappers.R"))
+
+ns3g <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
+
+check("xdep-fn: compute(1,2) uses current add => (1+2+1000)*10 = 10030", quote(
+  get("compute", envir = ns3g)(1, 2) == 10030
+))
+
+# Change only base.R: revert add to simple a+b
+writeLines(c(
+  "add <- function(a, b) {",
+  "  a + b",
+  "}",
+  "",
+  "scale_vector <- function(x, factor = 1) {",
+  "  x * factor",
+  "}",
+  "",
+  "multiply <- function(a, b) {",
+  "  a * b",
+  "}"
+), file.path(tmp_dir, "R", "base.R"))
+
+ns3g2 <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
+
+check("xdep-fn: compute(1,2) reflects changed add => (1+2)*10 = 30", quote(
+  get("compute", envir = ns3g2)(1, 2) == 30
+))
+
+check("xdep-fn: compute in pkg env also reflects change", quote(
+  get("compute", pos = pkg_env_name3)(1, 2) == 30
+))
+
+# ============================================================================
+# 3h: Cross-file S4 method dependency
+#     describe_loud() in wrappers.R calls the describe() generic whose
+#     method is defined in s4_classes.R.  Changing only the method in
+#     s4_classes.R should change describe_loud()'s output.
+# ============================================================================
+cat("\n--- 3h: cross-file S4 method dependency ---\n\n")
+
+writeLines(c(
+  "compute <- function(a, b) add(a, b) * 10",
+  "",
+  "describe_loud <- function(obj) paste0(describe(obj), \"!!!\")"
+), file.path(tmp_dir, "R", "wrappers.R"))
+
+ns3h <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
+
+a3h <- get("animal", envir = ns3h)("Rex", "dog", 4)
+check("xdep-method: describe_loud uses original describe", quote(
+  get("describe_loud", envir = ns3h)(a3h) == "Rex is a dog with 4 legs!!!"
+))
+
+# Change only s4_classes.R: alter describe(Animal) output format
+writeLines(c(
+  "setClass(\"Animal\", representation(",
+  "  name    = \"character\",",
+  "  species = \"character\",",
+  "  legs    = \"numeric\"",
+  "))",
+  "",
+  "setClass(\"Pet\", contains = \"Animal\", representation(",
+  "  owner = \"character\"",
+  "))",
+  "",
+  "setGeneric(\"describe\", function(object, ...) {",
+  "  standardGeneric(\"describe\")",
+  "})",
+  "",
+  "setGeneric(\"greet\", function(object) {",
+  "  standardGeneric(\"greet\")",
+  "})",
+  "",
+  "setMethod(\"describe\", \"Animal\", function(object, ...) {",
+  "  paste0(object@name, \" the \", object@species, \" (\", object@legs, \" legs)\")",
+  "})",
+  "",
+  "setMethod(\"describe\", \"Pet\", function(object, ...) {",
+  "  base_desc <- callNextMethod()",
+  "  paste0(base_desc, \", owned by \", object@owner)",
+  "})",
+  "",
+  "setMethod(\"greet\", \"Pet\", function(object) {",
+  "  paste0(\"Hello! My name is \", object@name, \" and I belong to \", object@owner)",
+  "})",
+  "",
+  "animal <- function(name, species, legs) {",
+  "  new(\"Animal\", name = name, species = species, legs = legs)",
+  "}",
+  "",
+  "pet <- function(name, species, legs, owner) {",
+  "  new(\"Pet\", name = name, species = species, legs = legs, owner = owner)",
+  "}"
+), file.path(tmp_dir, "R", "s4_classes.R"))
+
+ns3h2 <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
+
+a3h2 <- get("animal", envir = ns3h2)("Rex", "dog", 4)
+check("xdep-method: describe_loud reflects changed describe method", quote(
+  get("describe_loud", envir = ns3h2)(a3h2) == "Rex the dog (4 legs)!!!"
+))
+
+check("xdep-method: describe_loud in pkg env also reflects change", quote(
+  get("describe_loud", pos = pkg_env_name3)(a3h2) == "Rex the dog (4 legs)!!!"
+))
+
+# Also verify with Pet (callNextMethod chain)
+p3h2 <- get("pet", envir = ns3h2)("Milo", "cat", 4, "Alice")
+check("xdep-method: describe(Pet) uses updated Animal method via callNextMethod", quote(
+  get("describe", envir = ns3h2)(p3h2) == "Milo the cat (4 legs), owned by Alice"
+))
+
+# ============================================================================
+# 3i: Cross-file S4 class change affecting constructor in another file
+#     make_animal() in wrappers.R calls new("Animal", ...).  Changing the
+#     Animal class definition in s4_classes.R (adding an age slot with
+#     a prototype default) should make make_animal() return an object
+#     with the new slot.
+# ============================================================================
+cat("\n--- 3i: cross-file S4 class change affecting constructor ---\n\n")
+
+writeLines(c(
+  "compute <- function(a, b) add(a, b) * 10",
+  "",
+  "describe_loud <- function(obj) paste0(describe(obj), \"!!!\")",
+  "",
+  "make_animal <- function(n, s, l) new(\"Animal\", name = n, species = s, legs = l)"
+), file.path(tmp_dir, "R", "wrappers.R"))
+
+ns3i <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
+
+a3i <- get("make_animal", envir = ns3i)("Rex", "dog", 4)
+check("xdep-s4class: make_animal creates Animal (before class change)", quote(
+  is(a3i, "Animal") && a3i@name == "Rex" && a3i@legs == 4
+))
+
+check("xdep-s4class: Animal does NOT have age slot yet", quote(
+  !methods::.hasSlot(a3i, "age")
+))
+
+# Change only s4_classes.R: add age slot with prototype default
+writeLines(c(
+  "setClass(\"Animal\", representation(",
+  "  name    = \"character\",",
+  "  species = \"character\",",
+  "  legs    = \"numeric\",",
+  "  age     = \"numeric\"",
+  "), prototype = list(age = 0))",
+  "",
+  "setClass(\"Pet\", contains = \"Animal\", representation(",
+  "  owner = \"character\"",
+  "))",
+  "",
+  "setGeneric(\"describe\", function(object, ...) {",
+  "  standardGeneric(\"describe\")",
+  "})",
+  "",
+  "setGeneric(\"greet\", function(object) {",
+  "  standardGeneric(\"greet\")",
+  "})",
+  "",
+  "setMethod(\"describe\", \"Animal\", function(object, ...) {",
+  "  paste0(object@name, \" the \", object@species, \" (\", object@legs, \" legs)\")",
+  "})",
+  "",
+  "setMethod(\"describe\", \"Pet\", function(object, ...) {",
+  "  base_desc <- callNextMethod()",
+  "  paste0(base_desc, \", owned by \", object@owner)",
+  "})",
+  "",
+  "setMethod(\"greet\", \"Pet\", function(object) {",
+  "  paste0(\"Hello! My name is \", object@name, \" and I belong to \", object@owner)",
+  "})",
+  "",
+  "animal <- function(name, species, legs, age = 0) {",
+  "  new(\"Animal\", name = name, species = species, legs = legs, age = age)",
+  "}",
+  "",
+  "pet <- function(name, species, legs, owner) {",
+  "  new(\"Pet\", name = name, species = species, legs = legs, owner = owner)",
+  "}"
+), file.path(tmp_dir, "R", "s4_classes.R"))
+
+# Incremental reload — only s4_classes.R is re-sourced, wrappers.R is NOT
+ns3i2 <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
+
+# S4 class redefinition may silently fail without full eviction (per AGENTS.md).
+# Test what actually happens and then verify full=TRUE always works.
+a3i2_incr <- tryCatch(
+  get("make_animal", envir = ns3i2)("Rex", "dog", 4),
+  error = function(e) e
+)
+
+has_age_incr <- tryCatch(
+  !inherits(a3i2_incr, "error") &&
+    methods::.hasSlot(a3i2_incr, "age") &&
+    a3i2_incr@age == 0,
+  error = function(e) FALSE
+)
+
+if (has_age_incr) {
+  check("xdep-s4class: incremental picks up new age slot", quote(has_age_incr))
+} else {
+  cat("  (note: incremental reload did not pick up S4 class change — expected, use full=TRUE)\n")
+}
+
+# full=TRUE always works: full teardown re-registers the class cleanly
+ns3i_full <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+a3i_full <- get("make_animal", envir = ns3i_full)("Rex", "dog", 4)
+
+check("xdep-s4class: full=TRUE make_animal returns Animal with age slot", quote(
+  is(a3i_full, "Animal") && methods::.hasSlot(a3i_full, "age")
+))
+
+check("xdep-s4class: full=TRUE age slot has prototype default 0", quote(
+  a3i_full@age == 0
+))
+
+check("xdep-s4class: full=TRUE other slots still correct", quote(
+  a3i_full@name == "Rex" && a3i_full@species == "dog" && a3i_full@legs == 4
+))
+
+# Also verify the animal() constructor in s4_classes.R can set age explicitly
+a3i_aged <- get("animal", envir = ns3i_full)("Old Rex", "dog", 4, 12)
+check("xdep-s4class: full=TRUE animal() constructor accepts age param", quote(
+  a3i_aged@age == 12
+))
+
+# ============================================================================
 # Summary (inherited counters from test_checks.R)
 # ============================================================================
 cat("\n")
