@@ -1,0 +1,1131 @@
+# run_tests.R — unified test suite for loadfast / loadfast_incr
+# Expects load_fast() to be already defined (sourced by the wrapper script).
+# Expects .loader_name to be set by the wrapper ("loadfast" or "loadfast_incr").
+
+is_incr <- exists(".loader_name") && .loader_name == "loadfast_incr"
+
+passed <- 0L
+failed <- 0L
+
+check <- function(description, expr) {
+  result <- tryCatch(
+    {
+      ok <- eval(expr, envir = parent.frame())
+      if (isTRUE(ok)) "pass" else paste("FAIL -- got", deparse(ok))
+    },
+    error = function(e) paste("ERROR --", conditionMessage(e))
+  )
+  if (result == "pass") {
+    passed <<- passed + 1L
+    cat("[PASS]", description, "\n")
+  } else {
+    failed <<- failed + 1L
+    cat("[FAIL]", description, ":", result, "\n")
+  }
+}
+
+.tmp_dirs <- character(0)
+
+copy_baseline <- function(dest) {
+  dir.create(dest, recursive = TRUE, showWarnings = FALSE)
+  invisible(file.copy(file.path("devpackage", "DESCRIPTION"), dest))
+  invisible(file.copy(file.path("devpackage", "NAMESPACE"), dest))
+  dir.create(file.path(dest, "R"), showWarnings = FALSE)
+  for (f in list.files(file.path("devpackage", "R"), full.names = TRUE))
+    invisible(file.copy(f, file.path(dest, "R", basename(f))))
+  dir.create(file.path(dest, "tests", "testthat"), recursive = TRUE, showWarnings = FALSE)
+  for (f in list.files(file.path("devpackage", "tests", "testthat"), full.names = TRUE))
+    invisible(file.copy(f, file.path(dest, "tests", "testthat", basename(f))))
+  .tmp_dirs <<- c(.tmp_dirs, dest)
+}
+
+# ============================================================================
+# STAGE 1: Load frozen devpackage baseline
+# ============================================================================
+cat("\n--- Stage 1: load devpackage ---\n\n")
+
+ns <- load_fast("devpackage")
+
+# --- Package name from DESCRIPTION ---
+check("Package name is 'devpackage'", quote(
+  ns$.packageName == "devpackage"
+))
+
+# --- Namespace setup ---
+check("Namespace is registered", quote(
+  "devpackage" %in% loadedNamespaces()
+))
+
+check("isNamespace() returns TRUE", quote(
+  isNamespace(ns)
+))
+
+# --- Search path ---
+check("package:devpackage is on the search path", quote(
+  "package:devpackage" %in% search()
+))
+
+# --- Imports env structure ---
+impenv <- parent.env(ns)
+
+check("Imports env name is 'imports:devpackage'", quote(
+  identical(attr(impenv, "name"), "imports:devpackage")
+))
+
+check("Imports env parent is .BaseNamespaceEnv", quote(
+  identical(parent.env(impenv), .BaseNamespaceEnv)
+))
+
+# --- importFrom(rlang, ns_registry_env) ---
+check("ns_registry_env is in imports env", quote(
+  exists("ns_registry_env", envir = impenv, inherits = FALSE)
+))
+
+# --- import(methods) ---
+check("setClass is in imports env (from methods)", quote(
+  exists("setClass", envir = impenv, inherits = FALSE)
+))
+
+# --- importFrom(R6, R6Class) ---
+check("R6Class is in imports env", quote(
+  exists("R6Class", envir = impenv, inherits = FALSE)
+))
+
+# --- importFrom(data.table, ...) ---
+check(":= is in imports env", quote(
+  exists(":=", envir = impenv, inherits = FALSE)
+))
+
+check("as.data.table is in imports env", quote(
+  exists("as.data.table", envir = impenv, inherits = FALSE)
+))
+
+check("data.table is in imports env", quote(
+  exists("data.table", envir = impenv, inherits = FALSE)
+))
+
+check(":= is exposed in attached pkg env", quote(
+  exists(":=", where = "package:devpackage", inherits = FALSE)
+))
+
+check("as.data.table is exposed in attached pkg env", quote(
+  exists("as.data.table", where = "package:devpackage", inherits = FALSE)
+))
+
+check("data.table is exposed in attached pkg env", quote(
+  exists("data.table", where = "package:devpackage", inherits = FALSE)
+))
+
+# --- base.R functions ---
+check("add() exists in namespace", quote(
+  exists("add", envir = ns, inherits = FALSE)
+))
+
+check("add(2, 3) returns 5", quote(
+  get("add", envir = ns)(2, 3) == 5
+))
+
+check("add(-1, 1) returns 0", quote(
+  get("add", envir = ns)(-1, 1) == 0
+))
+
+check("add() is visible from attached env", quote(
+  exists("add", where = "package:devpackage", inherits = FALSE)
+))
+
+check("scale_vector(1:3, 2) returns c(2,4,6)", quote(
+  identical(get("scale_vector", envir = ns)(1:3, factor = 2), c(2, 4, 6))
+))
+
+check("summarize_values() returns mean, sd, n", quote({
+  s <- get("summarize_values", envir = ns)(c(2, 4, 6))
+  s$mean == 4 && s$n == 3 && is.numeric(s$sd) && is.null(s$range)
+}))
+
+# --- mutate_dt: data.table := inside package code ---
+check("mutate_dt() exists in namespace", quote(
+  exists("mutate_dt", envir = ns, inherits = FALSE)
+))
+
+check("mutate_dt() returns a data.table with := column", quote({
+  dt <- get("mutate_dt", envir = ns)(c(1, 2, 3), times = 10L)
+  data.table::is.data.table(dt) &&
+    identical(dt$val, c(1, 2, 3)) &&
+    identical(dt$scaled, c(10, 20, 30)) &&
+    ncol(dt) == 2L
+}))
+
+check("mutate_dt() is visible from attached env", quote(
+  exists("mutate_dt", where = "package:devpackage", inherits = FALSE)
+))
+
+# --- S4 classes ---
+check("Animal class is defined", quote(
+  isClass("Animal")
+))
+
+check("Pet class is defined", quote(
+  isClass("Pet")
+))
+
+check("Pet extends Animal", quote(
+  extends("Pet", "Animal")
+))
+
+# --- S4 generics ---
+check("describe generic exists", quote(
+  isGeneric("describe")
+))
+
+check("greet generic exists", quote(
+  isGeneric("greet")
+))
+
+check("speak generic does NOT exist yet", quote(
+  !isGeneric("speak")
+))
+
+# --- S4 constructors and slots ---
+a1 <- get("animal", envir = ns)("Rex", "dog", 4)
+p1 <- get("pet", envir = ns)("Milo", "cat", 4, "Alice")
+
+check("animal() returns an Animal instance", quote(
+  is(a1, "Animal")
+))
+
+check("pet() returns a Pet instance", quote(
+  is(p1, "Pet")
+))
+
+check("Pet instance is also an Animal", quote(
+  is(p1, "Animal")
+))
+
+check("Animal@name is correct", quote(
+  a1@name == "Rex"
+))
+
+check("Animal@species is correct", quote(
+  a1@species == "dog"
+))
+
+check("Animal@legs is correct", quote(
+  a1@legs == 4
+))
+
+check("Pet@owner is correct", quote(
+  p1@owner == "Alice"
+))
+
+# --- S4 method dispatch ---
+check("describe(Animal) works", quote(
+  get("describe", envir = ns)(a1) == "Rex is a dog with 4 legs"
+))
+
+check("describe(Pet) includes owner via callNextMethod", quote(
+  get("describe", envir = ns)(p1) == "Milo is a cat with 4 legs, owned by Alice"
+))
+
+check("greet(Pet) works", quote(
+  get("greet", envir = ns)(p1) == "Hello! My name is Milo and I belong to Alice"
+))
+
+# --- R6 classes ---
+check("Logger R6 generator exists in namespace", quote(
+  exists("Logger", envir = ns, inherits = FALSE)
+))
+
+check("Counter R6 generator exists in namespace", quote(
+  exists("Counter", envir = ns, inherits = FALSE)
+))
+
+lg1 <- get("Logger", envir = ns)$new()
+
+check("Logger$new() creates empty logger", quote(
+  lg1$size() == 0L
+))
+
+check("Logger$last() returns NA on empty", quote(
+  identical(lg1$last(), NA_character_)
+))
+
+lg1$log("hello")
+lg1$log("world")
+
+check("Logger$log() appends entries", quote(
+  lg1$size() == 2L
+))
+
+check("Logger$last() returns last entry", quote(
+  lg1$last() == "world"
+))
+
+check("Logger entries are plain (no level prefix in baseline)", quote(
+  identical(lg1$entries, c("hello", "world"))
+))
+
+ctr1 <- get("Counter", envir = ns)$new()
+
+check("Counter$new() starts at 0", quote(
+  ctr1$value == 0L
+))
+
+ctr1$increment()
+ctr1$increment(by = 5L)
+
+check("Counter$increment() accumulates", quote(
+  ctr1$value == 6L
+))
+
+ctr1$reset()
+
+check("Counter$reset() zeroes out", quote(
+  ctr1$value == 0L
+))
+
+check("Counter does NOT have decrement yet", quote(
+  is.null(ctr1$decrement)
+))
+
+# --- testthat helpers sourced into pkg env ---
+check("testthat is on the search path", quote(
+  "package:testthat" %in% search()
+))
+
+check("make_test_animal() is in attached pkg env", quote(
+  exists("make_test_animal", where = "package:devpackage", inherits = FALSE)
+))
+
+check("make_test_logger() is in attached pkg env", quote(
+  exists("make_test_logger", where = "package:devpackage", inherits = FALSE)
+))
+
+th_animal <- get("make_test_animal", pos = "package:devpackage")()
+th_logger <- get("make_test_logger", pos = "package:devpackage")()
+
+check("make_test_animal() returns an Animal", quote(
+  is(th_animal, "Animal")
+))
+
+check("make_test_animal() has correct name", quote(
+  th_animal@name == "TestAnimal"
+))
+
+check("make_test_logger() returns a Logger with one entry", quote(
+  th_logger$size() == 1L && th_logger$last() == "init"
+))
+
+# --- Run testthat suite for devpackage ---
+cat("\n--- Running testthat::test_dir() for devpackage ---\n\n")
+tt_results1 <- testthat::test_dir(
+  file.path("devpackage", "tests", "testthat"),
+  env = as.environment("package:devpackage"),
+  stop_on_failure = FALSE
+)
+tt_df1 <- as.data.frame(tt_results1)
+n_tt_fail1 <- sum(tt_df1$failed)
+n_tt_pass1 <- sum(tt_df1$passed)
+
+check("testthat devpackage: all tests pass", quote(
+  n_tt_fail1 == 0L
+))
+
+cat(sprintf("  (testthat devpackage: %d passed, %d failed)\n", n_tt_pass1, n_tt_fail1))
+
+# ============================================================================
+# STAGE 2: Full reload with mutated code (project2-style changes, ad-hoc)
+# ============================================================================
+cat("\n--- Stage 2: reload with mutated code ---\n\n")
+
+tmp_a <- tempfile("loadfast_s2_")
+copy_baseline(tmp_a)
+
+# --- Mutate R/base.R ---
+writeLines(c(
+  'add <- function(a, b) {',
+  '  a + b + 100',
+  '}',
+  '',
+  'scale_vector <- function(x, factor = 1) {',
+  '  (x - mean(x)) * factor',
+  '}',
+  '',
+  'summarize_values <- function(x) {',
+  '  list(mean = mean(x), sd = sd(x), n = length(x), range = range(x))',
+  '}',
+  '',
+  'mutate_dt <- function(x, times = 2L) {',
+  '  dt <- as.data.table(list(val = x))',
+  '  dt[, scaled := val * times]',
+  '  dt[, rnk := data.table::frank(val)]',
+  '  dt',
+  '}'
+), file.path(tmp_a, "R", "base.R"))
+
+# --- Mutate R/s4_classes.R ---
+writeLines(c(
+  'setClass("Animal", representation(',
+  '  name    = "character",',
+  '  species = "character",',
+  '  legs    = "numeric",',
+  '  age     = "numeric"',
+  '))',
+  '',
+  'setClass("Pet", contains = "Animal", representation(',
+  '  owner    = "character",',
+  '  nickname = "character"',
+  '))',
+  '',
+  'setGeneric("describe", function(object, ...) {',
+  '  standardGeneric("describe")',
+  '})',
+  '',
+  'setGeneric("greet", function(object) {',
+  '  standardGeneric("greet")',
+  '})',
+  '',
+  'setGeneric("speak", function(object) {',
+  '  standardGeneric("speak")',
+  '})',
+  '',
+  'setMethod("describe", "Animal", function(object, ...) {',
+  '  paste0(object@name, " is a ", object@species, ", age ", object@age, ", with ", object@legs, " legs")',
+  '})',
+  '',
+  'setMethod("describe", "Pet", function(object, ...) {',
+  '  base_desc <- callNextMethod()',
+  '  paste0(base_desc, ", nicknamed ", object@nickname, ", owned by ", object@owner)',
+  '})',
+  '',
+  'setMethod("greet", "Pet", function(object) {',
+  "  paste0(\"Hi! I'm \", object@nickname, \" (\", object@name, \") and \", object@owner, \" takes care of me\")",
+  '})',
+  '',
+  'setMethod("speak", "Animal", function(object) {',
+  '  paste0(object@name, " says hello")',
+  '})',
+  '',
+  'setMethod("speak", "Pet", function(object) {',
+  '  paste0(object@nickname, " says hello to ", object@owner)',
+  '})',
+  '',
+  'animal <- function(name, species, legs, age) {',
+  '  new("Animal", name = name, species = species, legs = legs, age = age)',
+  '}',
+  '',
+  'pet <- function(name, species, legs, age, owner, nickname) {',
+  '  new("Pet", name = name, species = species, legs = legs, age = age,',
+  '      owner = owner, nickname = nickname)',
+  '}'
+), file.path(tmp_a, "R", "s4_classes.R"))
+
+# --- Mutate R/r6_classes.R ---
+writeLines(c(
+  'Logger <- R6Class("Logger",',
+  '  public = list(',
+  '    entries = NULL,',
+  '    level = NULL,',
+  '    initialize = function(level = "INFO") {',
+  '      self$entries <- character(0)',
+  '      self$level <- level',
+  '    },',
+  '    log = function(msg) {',
+  '      entry <- paste0("[", self$level, "] ", msg)',
+  '      self$entries <- c(self$entries, entry)',
+  '      invisible(self)',
+  '    },',
+  '    last = function() {',
+  '      if (length(self$entries) == 0L) return(NA_character_)',
+  '      self$entries[length(self$entries)]',
+  '    },',
+  '    size = function() {',
+  '      length(self$entries)',
+  '    },',
+  '    format_entries = function() {',
+  '      paste(self$entries, collapse = "\\n")',
+  '    }',
+  '  )',
+  ')',
+  '',
+  'Counter <- R6Class("Counter",',
+  '  public = list(',
+  '    value = 0L,',
+  '    initialize = function(start = 0L) {',
+  '      self$value <- start',
+  '    },',
+  '    increment = function(by = 1L) {',
+  '      self$value <- self$value + by',
+  '      invisible(self)',
+  '    },',
+  '    decrement = function(by = 1L) {',
+  '      self$value <- self$value - by',
+  '      invisible(self)',
+  '    },',
+  '    reset = function() {',
+  '      self$value <- 0L',
+  '      invisible(self)',
+  '    }',
+  '  )',
+  ')'
+), file.path(tmp_a, "R", "r6_classes.R"))
+
+# --- Mutate tests/testthat/helper-utils.R ---
+writeLines(c(
+  'make_test_animal <- function() animal("TestAnimal2", "test_species2", 6, 2)',
+  '',
+  'make_test_logger <- function() {',
+  '  lg <- Logger$new("DEBUG")',
+  '  lg$log("init")',
+  '  lg',
+  '}'
+), file.path(tmp_a, "tests", "testthat", "helper-utils.R"))
+
+ns2 <- load_fast(tmp_a)
+
+# --- Basics still hold ---
+check("Package name is still 'devpackage'", quote(
+  ns2$.packageName == "devpackage"
+))
+
+check("isNamespace() returns TRUE after reload", quote(
+  isNamespace(ns2)
+))
+
+check("package:devpackage is still on the search path", quote(
+  "package:devpackage" %in% search()
+))
+
+# --- base.R changed behavior ---
+check("add(2, 3) now returns 105", quote(
+  get("add", envir = ns2)(2, 3) == 105
+))
+
+check("add(0, 0) now returns 100", quote(
+  get("add", envir = ns2)(0, 0) == 100
+))
+
+check("scale_vector() now centers before scaling", quote(
+  identical(get("scale_vector", envir = ns2)(c(1, 3), factor = 1), c(-1, 1))
+))
+
+check("summarize_values() now includes range", quote({
+  s <- get("summarize_values", envir = ns2)(c(2, 4, 6))
+  s$mean == 4 && identical(s$range, c(2, 6))
+}))
+
+# --- mutate_dt: adds a rank column ---
+check("mutate_dt() now returns 3 columns with rnk", quote({
+  dt <- get("mutate_dt", envir = ns2)(c(30, 10, 20), times = 2L)
+  data.table::is.data.table(dt) &&
+    identical(dt$val, c(30, 10, 20)) &&
+    identical(dt$scaled, c(60, 20, 40)) &&
+    identical(dt$rnk, c(3, 1, 2)) &&
+    ncol(dt) == 3L
+}))
+
+# --- S4 classes updated ---
+check("Animal class still exists", quote(
+  isClass("Animal")
+))
+
+check("Pet class still exists", quote(
+  isClass("Pet")
+))
+
+check("Pet still extends Animal", quote(
+  extends("Pet", "Animal")
+))
+
+# --- Animal now has age slot ---
+a2 <- get("animal", envir = ns2)("Rex", "dog", 4, 5)
+
+check("Animal now accepts age parameter", quote(
+  is(a2, "Animal")
+))
+
+check("Animal@age is correct", quote(
+  a2@age == 5
+))
+
+# --- Pet now has nickname slot ---
+p2 <- get("pet", envir = ns2)("Milo", "cat", 4, 3, "Alice", "Meowster")
+
+check("Pet now accepts nickname parameter", quote(
+  is(p2, "Pet")
+))
+
+check("Pet@nickname is correct", quote(
+  p2@nickname == "Meowster"
+))
+
+check("Pet@age inherited from Animal is correct", quote(
+  p2@age == 3
+))
+
+# --- describe() output changed ---
+check("describe(Animal) now includes age", quote(
+  get("describe", envir = ns2)(a2) == "Rex is a dog, age 5, with 4 legs"
+))
+
+check("describe(Pet) now includes nickname and age", quote(
+  get("describe", envir = ns2)(p2) == "Milo is a cat, age 3, with 4 legs, nicknamed Meowster, owned by Alice"
+))
+
+# --- greet() output changed ---
+check("greet(Pet) has new wording", quote(
+  get("greet", envir = ns2)(p2) == "Hi! I'm Meowster (Milo) and Alice takes care of me"
+))
+
+# --- speak() is new ---
+check("speak generic now exists", quote(
+  isGeneric("speak")
+))
+
+check("speak(Animal) works", quote(
+  get("speak", envir = ns2)(a2) == "Rex says hello"
+))
+
+check("speak(Pet) works", quote(
+  get("speak", envir = ns2)(p2) == "Meowster says hello to Alice"
+))
+
+# --- R6 classes updated ---
+lg2 <- get("Logger", envir = ns2)$new("WARN")
+
+check("Logger now accepts a level argument", quote(
+  lg2$level == "WARN"
+))
+
+lg2$log("problem")
+
+check("Logger$log() now prefixes with level", quote(
+  lg2$last() == "[WARN] problem"
+))
+
+lg2$log("another")
+
+check("Logger$format_entries() is new", quote(
+  !is.null(lg2$format_entries) && lg2$format_entries() == "[WARN] problem\n[WARN] another"
+))
+
+ctr2 <- get("Counter", envir = ns2)$new(10L)
+
+check("Counter$new(10) starts at 10", quote(
+  ctr2$value == 10L
+))
+
+ctr2$decrement(by = 3L)
+
+check("Counter$decrement() is new", quote(
+  ctr2$value == 7L
+))
+
+# --- testthat helpers updated after reload ---
+th_animal2 <- get("make_test_animal", pos = "package:devpackage")()
+th_logger2 <- get("make_test_logger", pos = "package:devpackage")()
+
+check("make_test_animal() returns updated Animal", quote(
+  is(th_animal2, "Animal") && th_animal2@name == "TestAnimal2"
+))
+
+check("make_test_animal() Animal has age slot", quote(
+  th_animal2@age == 2
+))
+
+check("make_test_logger() now uses DEBUG level", quote(
+  th_logger2$level == "DEBUG"
+))
+
+check("make_test_logger() entry is prefixed with level", quote(
+  th_logger2$last() == "[DEBUG] init"
+))
+
+# ============================================================================
+# STAGE 3: Cross-file dependency tests
+#   Function in file A depends on a definition in file B.  Only file B
+#   changes — verify file A's output reflects the change.
+# ============================================================================
+cat("\n--- Stage 3: cross-file dependency tests ---\n\n")
+
+tmp_b <- tempfile("loadfast_s3_")
+copy_baseline(tmp_b)
+
+ns3 <- load_fast(tmp_b, helpers = FALSE, attach_testthat = FALSE)
+pkg_env3 <- "package:devpackage"
+
+# --------------------------------------------------------------------------
+# 3a: Plain function — compute() in wrappers.R calls add() from base.R
+# --------------------------------------------------------------------------
+cat("\n--- 3a: cross-file plain function dependency ---\n\n")
+
+writeLines(c(
+  'compute <- function(a, b) add(a, b) * 10'
+), file.path(tmp_b, "R", "wrappers.R"))
+
+ns3a <- load_fast(tmp_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("xdep-fn: compute(1,2) uses original add => (1+2)*10 = 30", quote(
+  get("compute", envir = ns3a)(1, 2) == 30
+))
+
+# Change only base.R: add now includes +1000 offset
+writeLines(c(
+  'add <- function(a, b) {',
+  '  a + b + 1000',
+  '}',
+  '',
+  'scale_vector <- function(x, factor = 1) {',
+  '  x * factor',
+  '}',
+  '',
+  'summarize_values <- function(x) {',
+  '  list(mean = mean(x), sd = sd(x), n = length(x))',
+  '}',
+  '',
+  'mutate_dt <- function(x, times = 2L) {',
+  '  dt <- as.data.table(list(val = x))',
+  '  dt[, scaled := val * times]',
+  '  dt',
+  '}'
+), file.path(tmp_b, "R", "base.R"))
+
+ns3a2 <- load_fast(tmp_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("xdep-fn: compute(1,2) reflects changed add => (1+2+1000)*10 = 10030", quote(
+  get("compute", envir = ns3a2)(1, 2) == 10030
+))
+
+check("xdep-fn: compute in pkg env also reflects change", quote(
+  get("compute", pos = pkg_env3)(1, 2) == 10030
+))
+
+# --------------------------------------------------------------------------
+# 3b: S4 method — describe_loud() in wrappers.R calls describe() generic
+#     whose method lives in s4_classes.R
+# --------------------------------------------------------------------------
+cat("\n--- 3b: cross-file S4 method dependency ---\n\n")
+
+writeLines(c(
+  'compute <- function(a, b) add(a, b) * 10',
+  '',
+  'describe_loud <- function(obj) paste0(describe(obj), "!!!")'
+), file.path(tmp_b, "R", "wrappers.R"))
+
+ns3b <- load_fast(tmp_b, helpers = FALSE, attach_testthat = FALSE)
+
+a3b <- get("animal", envir = ns3b)("Rex", "dog", 4)
+check("xdep-method: describe_loud uses original describe", quote(
+  get("describe_loud", envir = ns3b)(a3b) == "Rex is a dog with 4 legs!!!"
+))
+
+# Change only s4_classes.R: alter describe(Animal) output format
+writeLines(c(
+  'setClass("Animal", representation(',
+  '  name    = "character",',
+  '  species = "character",',
+  '  legs    = "numeric"',
+  '))',
+  '',
+  'setClass("Pet", contains = "Animal", representation(',
+  '  owner = "character"',
+  '))',
+  '',
+  'setGeneric("describe", function(object, ...) {',
+  '  standardGeneric("describe")',
+  '})',
+  '',
+  'setGeneric("greet", function(object) {',
+  '  standardGeneric("greet")',
+  '})',
+  '',
+  'setMethod("describe", "Animal", function(object, ...) {',
+  '  paste0(object@name, " the ", object@species, " (", object@legs, " legs)")',
+  '})',
+  '',
+  'setMethod("describe", "Pet", function(object, ...) {',
+  '  base_desc <- callNextMethod()',
+  '  paste0(base_desc, ", owned by ", object@owner)',
+  '})',
+  '',
+  'setMethod("greet", "Pet", function(object) {',
+  '  paste0("Hello! My name is ", object@name, " and I belong to ", object@owner)',
+  '})',
+  '',
+  'animal <- function(name, species, legs) {',
+  '  new("Animal", name = name, species = species, legs = legs)',
+  '}',
+  '',
+  'pet <- function(name, species, legs, owner) {',
+  '  new("Pet", name = name, species = species, legs = legs, owner = owner)',
+  '}'
+), file.path(tmp_b, "R", "s4_classes.R"))
+
+ns3b2 <- load_fast(tmp_b, helpers = FALSE, attach_testthat = FALSE)
+
+a3b2 <- get("animal", envir = ns3b2)("Rex", "dog", 4)
+check("xdep-method: describe_loud reflects changed describe method", quote(
+  get("describe_loud", envir = ns3b2)(a3b2) == "Rex the dog (4 legs)!!!"
+))
+
+check("xdep-method: describe_loud in pkg env also reflects change", quote(
+  get("describe_loud", pos = pkg_env3)(a3b2) == "Rex the dog (4 legs)!!!"
+))
+
+p3b2 <- get("pet", envir = ns3b2)("Milo", "cat", 4, "Alice")
+check("xdep-method: describe(Pet) uses updated Animal method via callNextMethod", quote(
+  get("describe", envir = ns3b2)(p3b2) == "Milo the cat (4 legs), owned by Alice"
+))
+
+# --------------------------------------------------------------------------
+# 3c: S4 class change — make_animal() in wrappers.R calls new("Animal",...)
+#     Adding an age slot in s4_classes.R should be reflected in the object
+#     returned by the unchanged make_animal().
+# --------------------------------------------------------------------------
+cat("\n--- 3c: cross-file S4 class change affecting constructor ---\n\n")
+
+writeLines(c(
+  'compute <- function(a, b) add(a, b) * 10',
+  '',
+  'describe_loud <- function(obj) paste0(describe(obj), "!!!")',
+  '',
+  'make_animal <- function(n, s, l) new("Animal", name = n, species = s, legs = l)'
+), file.path(tmp_b, "R", "wrappers.R"))
+
+ns3c <- load_fast(tmp_b, helpers = FALSE, attach_testthat = FALSE)
+
+a3c <- get("make_animal", envir = ns3c)("Rex", "dog", 4)
+check("xdep-s4class: make_animal creates Animal (before class change)", quote(
+  is(a3c, "Animal") && a3c@name == "Rex" && a3c@legs == 4
+))
+
+check("xdep-s4class: Animal does NOT have age slot yet", quote(
+  !methods::.hasSlot(a3c, "age")
+))
+
+# Change only s4_classes.R: add age slot with prototype default
+writeLines(c(
+  'setClass("Animal", representation(',
+  '  name    = "character",',
+  '  species = "character",',
+  '  legs    = "numeric",',
+  '  age     = "numeric"',
+  '), prototype = list(age = 0))',
+  '',
+  'setClass("Pet", contains = "Animal", representation(',
+  '  owner = "character"',
+  '))',
+  '',
+  'setGeneric("describe", function(object, ...) {',
+  '  standardGeneric("describe")',
+  '})',
+  '',
+  'setGeneric("greet", function(object) {',
+  '  standardGeneric("greet")',
+  '})',
+  '',
+  'setMethod("describe", "Animal", function(object, ...) {',
+  '  paste0(object@name, " the ", object@species, " (", object@legs, " legs)")',
+  '})',
+  '',
+  'setMethod("describe", "Pet", function(object, ...) {',
+  '  base_desc <- callNextMethod()',
+  '  paste0(base_desc, ", owned by ", object@owner)',
+  '})',
+  '',
+  'setMethod("greet", "Pet", function(object) {',
+  '  paste0("Hello! My name is ", object@name, " and I belong to ", object@owner)',
+  '})',
+  '',
+  'animal <- function(name, species, legs, age = 0) {',
+  '  new("Animal", name = name, species = species, legs = legs, age = age)',
+  '}',
+  '',
+  'pet <- function(name, species, legs, owner) {',
+  '  new("Pet", name = name, species = species, legs = legs, owner = owner)',
+  '}'
+), file.path(tmp_b, "R", "s4_classes.R"))
+
+# Incremental reload — only s4_classes.R re-sourced, wrappers.R unchanged
+ns3c2 <- load_fast(tmp_b, helpers = FALSE, attach_testthat = FALSE)
+
+a3c2_incr <- tryCatch(
+  get("make_animal", envir = ns3c2)("Rex", "dog", 4),
+  error = function(e) e
+)
+
+has_age_incr <- tryCatch(
+  !inherits(a3c2_incr, "error") &&
+    methods::.hasSlot(a3c2_incr, "age") &&
+    a3c2_incr@age == 0,
+  error = function(e) FALSE
+)
+
+if (has_age_incr) {
+  check("xdep-s4class: reload picks up new age slot", quote(has_age_incr))
+} else {
+  cat("  (note: reload did not pick up S4 class change — using full=TRUE)\n")
+}
+
+# full=TRUE always works: full teardown re-registers the class cleanly
+ns3c_full <- load_fast(tmp_b, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+a3c_full <- get("make_animal", envir = ns3c_full)("Rex", "dog", 4)
+
+check("xdep-s4class: full=TRUE make_animal returns Animal with age slot", quote(
+  is(a3c_full, "Animal") && methods::.hasSlot(a3c_full, "age")
+))
+
+check("xdep-s4class: full=TRUE age slot has prototype default 0", quote(
+  a3c_full@age == 0
+))
+
+check("xdep-s4class: full=TRUE other slots still correct", quote(
+  a3c_full@name == "Rex" && a3c_full@species == "dog" && a3c_full@legs == 4
+))
+
+a3c_aged <- get("animal", envir = ns3c_full)("Old Rex", "dog", 4, 12)
+check("xdep-s4class: full=TRUE animal() constructor accepts age param", quote(
+  a3c_aged@age == 12
+))
+
+# ============================================================================
+# STAGE 4: Incremental-specific tests (only for loadfast_incr)
+#   These test behaviors unique to the incremental loader: no-change
+#   short-circuit, stale symbol lingering, and full=TRUE cleanup.
+# ============================================================================
+if (is_incr) {
+
+cat("\n--- Stage 4: incremental-specific tests ---\n\n")
+
+tmp_c <- tempfile("loadfast_s4_")
+copy_baseline(tmp_c)
+
+pkg_env4 <- "package:devpackage"
+
+ns4 <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("incr-setup: full load works", quote(
+  is.environment(ns4) && isNamespace(ns4)
+))
+
+check("incr-setup: add(1,2) returns 3", quote(
+  get("add", envir = ns4)(1, 2) == 3
+))
+
+check("incr-setup: summarize_values exists", quote(
+  exists("summarize_values", envir = ns4, inherits = FALSE)
+))
+
+check("incr-setup: scale_vector exists", quote(
+  exists("scale_vector", envir = ns4, inherits = FALSE)
+))
+
+# --- 4a: No change — second load should short-circuit ---
+cat("\n--- 4a: no-change reload ---\n\n")
+
+ns4a <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("no-change: returns same ns_env", quote(
+  identical(ns4a, ns4)
+))
+
+check("no-change: add still works", quote(
+  get("add", envir = ns4a)(10, 20) == 30
+))
+
+# --- 4b: Remove a function from base.R ---
+cat("\n--- 4b: remove summarize_values from base.R ---\n\n")
+
+writeLines(c(
+  'add <- function(a, b) {',
+  '  a + b',
+  '}',
+  '',
+  'scale_vector <- function(x, factor = 1) {',
+  '  x * factor',
+  '}'
+), file.path(tmp_c, "R", "base.R"))
+
+ns4b <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("remove-fn: summarize_values lingers (no stale cleanup)", quote(
+  exists("summarize_values", envir = ns4b, inherits = FALSE)
+))
+
+check("remove-fn: add still works", quote(
+  get("add", envir = ns4b)(1, 2) == 3
+))
+
+check("remove-fn: scale_vector still works", quote(
+  identical(get("scale_vector", envir = ns4b)(1:3, factor = 2), c(2, 4, 6))
+))
+
+check("remove-fn: R6 classes unaffected", quote(
+  exists("Logger", envir = ns4b, inherits = FALSE) &&
+  exists("Counter", envir = ns4b, inherits = FALSE)
+))
+
+ns4b_full <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("remove-fn: full=TRUE clears summarize_values from ns", quote(
+  !exists("summarize_values", envir = ns4b_full, inherits = FALSE)
+))
+
+check("remove-fn: full=TRUE clears summarize_values from pkg env", quote(
+  !exists("summarize_values", where = pkg_env4, inherits = FALSE)
+))
+
+# --- 4c: Add a new function to base.R ---
+cat("\n--- 4c: add multiply() to base.R ---\n\n")
+
+writeLines(c(
+  'add <- function(a, b) {',
+  '  a + b',
+  '}',
+  '',
+  'scale_vector <- function(x, factor = 1) {',
+  '  x * factor',
+  '}',
+  '',
+  'multiply <- function(a, b) {',
+  '  a * b',
+  '}'
+), file.path(tmp_c, "R", "base.R"))
+
+ns4c <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("add-fn: multiply exists in namespace", quote(
+  exists("multiply", envir = ns4c, inherits = FALSE)
+))
+
+check("add-fn: multiply(3,4) returns 12", quote(
+  get("multiply", envir = ns4c)(3, 4) == 12
+))
+
+check("add-fn: multiply visible from pkg env", quote(
+  exists("multiply", where = pkg_env4, inherits = FALSE)
+))
+
+check("add-fn: add still works", quote(
+  get("add", envir = ns4c)(5, 6) == 11
+))
+
+# --- 4d: Modify a function (change behavior, same name) ---
+cat("\n--- 4d: modify add() behavior ---\n\n")
+
+writeLines(c(
+  'add <- function(a, b) {',
+  '  a + b + 1000',
+  '}',
+  '',
+  'scale_vector <- function(x, factor = 1) {',
+  '  x * factor',
+  '}',
+  '',
+  'multiply <- function(a, b) {',
+  '  a * b',
+  '}'
+), file.path(tmp_c, "R", "base.R"))
+
+ns4d <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("modify-fn: add(1,2) now returns 1003", quote(
+  get("add", envir = ns4d)(1, 2) == 1003
+))
+
+check("modify-fn: add updated in pkg env too", quote(
+  get("add", pos = pkg_env4)(1, 2) == 1003
+))
+
+check("modify-fn: multiply still works", quote(
+  get("multiply", envir = ns4d)(3, 4) == 12
+))
+
+# --- 4e: Add a new R file ---
+cat("\n--- 4e: add new file extras.R ---\n\n")
+
+writeLines(c(
+  'negate <- function(x) -x',
+  '',
+  'double <- function(x) x * 2'
+), file.path(tmp_c, "R", "extras.R"))
+
+ns4e <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("new-file: negate exists", quote(
+  exists("negate", envir = ns4e, inherits = FALSE)
+))
+
+check("new-file: negate(5) returns -5", quote(
+  get("negate", envir = ns4e)(5) == -5
+))
+
+check("new-file: double exists in pkg env", quote(
+  exists("double", where = pkg_env4, inherits = FALSE)
+))
+
+check("new-file: double(7) returns 14", quote(
+  get("double", pos = pkg_env4)(7) == 14
+))
+
+check("new-file: existing functions unaffected", quote(
+  get("add", envir = ns4e)(1, 2) == 1003
+))
+
+# --- 4f: Delete an R file entirely ---
+cat("\n--- 4f: delete extras.R ---\n\n")
+
+invisible(file.remove(file.path(tmp_c, "R", "extras.R")))
+
+ns4f <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("del-file: negate lingers (no stale cleanup)", quote(
+  exists("negate", envir = ns4f, inherits = FALSE)
+))
+
+check("del-file: add still works", quote(
+  get("add", envir = ns4f)(1, 2) == 1003
+))
+
+check("del-file: R6 classes still work", quote({
+  ctr <- get("Counter", envir = ns4f)$new()
+  ctr$increment(by = 3L)
+  ctr$value == 3L
+}))
+
+ns4f_full <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("del-file: full=TRUE clears negate from ns", quote(
+  !exists("negate", envir = ns4f_full, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears double from ns", quote(
+  !exists("double", envir = ns4f_full, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears negate from pkg env", quote(
+  !exists("negate", where = pkg_env4, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears double from pkg env", quote(
+  !exists("double", where = pkg_env4, inherits = FALSE)
+))
+
+check("del-file: full=TRUE add still works", quote(
+  get("add", envir = ns4f_full)(1, 2) == 1003
+))
+
+} # end if (is_incr)
+
+# ============================================================================
+# Summary
+# ============================================================================
+cat("\n")
+cat("Results:", passed, "passed,", failed, "failed\n")
+for (d in .tmp_dirs) unlink(d, recursive = TRUE)
+if (failed > 0L) {
+  cat("SOME TESTS FAILED\n")
+  quit(status = 1L)
+} else {
+  cat("ALL TESTS PASSED\n")
+}

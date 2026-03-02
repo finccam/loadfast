@@ -13,10 +13,10 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 
 - **`loadfast.R`** (top-level) is the standalone replacement for `devtools::load_all()`. Always does a full teardown+rebuild on every call.
 - **`loadfast_incr.R`** (top-level) is the incremental variant. On first call it does a full load; on subsequent calls for the same path it re-sources only files whose MD5 hash changed, with per-file symbol tracking to handle removed functions. See "Incremental loader" section below.
-- **`test_checks.R`** — shared test body (counters, `check()` helper, Stage 1 + Stage 2). Does NOT include a summary/quit block — each runner appends its own.
-- **`test_loadfast.R`** — thin wrapper: sources `loadfast.R` then `test_checks.R`, then prints summary.
-- **`test_loadfast_incr.R`** — thin wrapper: sources `loadfast_incr.R` then `test_checks.R`, then runs Stage 3 (incremental-specific tests using a temp copy of project1: no-change, function removal, function addition, function modification, new file, file deletion), then prints summary.
-- **`project1/`** and **`project2/`** are frozen package snapshots used by the tests. Each contains `DESCRIPTION`, `NAMESPACE`, `R/` (source files), and `tests/testthat/` (testthat tests + helpers). Both have the **same `Package: devpackage`** name — this is intentional (see testing section below).
+- **`run_tests.R`** — unified test suite containing all stages. Expects `load_fast()` to already be defined and `.loader_name` to be set by the wrapper script. Stage 4 (incremental-specific) runs only when `.loader_name == "loadfast_incr"`.
+- **`test_loadfast.R`** — thin wrapper: sources `loadfast.R`, sets `.loader_name <- "loadfast"`, sources `run_tests.R`.
+- **`test_loadfast_incr.R`** — thin wrapper: sources `loadfast_incr.R`, sets `.loader_name <- "loadfast_incr"`, sources `run_tests.R`.
+- **`devpackage/`** is the single frozen baseline package snapshot used by the tests. Contains `DESCRIPTION`, `NAMESPACE`, `R/` (source files), and `tests/testthat/` (testthat tests + helpers). Package name is `devpackage`. All code mutations for reload/incremental testing are applied ad-hoc to temp copies at test time.
   - `R/base.R` — plain functions (`add`, `scale_vector`, `summarize_values`, `mutate_dt`) — `mutate_dt` exercises `data.table`'s `:=` and `as.data.table` via `importFrom`
   - `R/s4_classes.R` — S4 classes (`Animal`, `Pet`), generics, methods
   - `R/r6_classes.R` — R6 classes (`Logger`, `Counter`)
@@ -48,13 +48,18 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 
 ## Testing gotchas
 
-- Both project snapshots must declare the **same `Package:` name**. If they differ, `load_fast()` would load two independent packages and the detach/unregister/rebuild path would never be exercised.
-- Both NAMESPACE files are currently **identical**. The test does not yet cover NAMESPACE changes across reloads.
 - The `check()` helper wraps test expressions in `quote()` and evaluates with `eval(..., envir = parent.frame())`. Without `quote()`, errors from the assertion itself would escape `tryCatch`.
-- Both test runners run `testthat::test_dir()` against each project's `tests/testthat/` directory after `load_fast()`, passing the attached package environment so that testthat can find the package's exported objects and helpers.
-- project2 intentionally changes behavior across all three class systems (plain functions, S4, R6) so the reload path is exercised for each. Examples: `Logger` gains a `level` field and `format_entries()` method; `Counter` gains `decrement()`; `Animal` gains an `age` slot; `summarize_values()` adds a `range` element.
-- Stage 1 → Stage 2 (project1 → project2) are **different directories**, so they always trigger full loads even in `loadfast_incr.R` (cache is keyed by abs path). The incremental path is exercised by Stage 3 in `test_loadfast_incr.R`, which copies project1 to a temp dir and mutates files in place between `load_fast()` calls.
-- Stage 3 tests verify that stale symbols **linger** after incremental reloads (expected behavior), and that `full = TRUE` properly cleans them up.
+- `testthat::test_dir()` runs only once (Stage 1, against the frozen `devpackage/` snapshot). Subsequent stages verify behavior via `check()` assertions, which already cover everything the testthat suite tests.
+- **`on.exit()` cannot be used at the top level of `run_tests.R`** because it is `source()`'d from a wrapper script. Inside `source()`, `on.exit()` registers on the `eval()` frame which exits immediately, causing premature cleanup. Temp directories are instead tracked in `.tmp_dirs` and cleaned up explicitly at the end of the file.
+- **Test stages** (all in `run_tests.R`):
+  - **Stage 1**: Load frozen `devpackage/` from its original location. Full checks (namespace, imports, S4, R6, data.table, testthat helpers) + `test_dir()` run.
+  - **Stage 2**: Copy `devpackage/` to a temp dir, apply mutations via `writeLines()` (changed function behavior, new S4 slots, new R6 methods, updated testthat helpers), load, verify all changed behavior. The mutations change behavior across all three class systems (plain functions, S4, R6) so the reload path is exercised for each.
+  - **Stage 3**: Copy `devpackage/` to a second temp dir, test cross-file dependencies:
+    - 3a: `compute()` in `wrappers.R` calls `add()` from `base.R` — change only `base.R`, verify `compute()` output changes.
+    - 3b: `describe_loud()` in `wrappers.R` calls `describe()` generic from `s4_classes.R` — change only the method, verify `describe_loud()` output changes. Also tests `callNextMethod` chain for `Pet`.
+    - 3c: `make_animal()` in `wrappers.R` calls `new("Animal",...)` — add `age` slot to the class in `s4_classes.R`, verify the unchanged constructor returns an object with the new slot.
+  - **Stage 4** (incremental only): Copy `devpackage/` to a third temp dir, test incremental-specific behaviors: no-change short-circuit, function removal (stale symbols linger), function addition, function modification, new file, file deletion. Verifies that `full = TRUE` properly cleans up stale symbols.
+- Stage 2 always triggers a full load for both loaders (different path from Stage 1 = cache miss for the incremental loader). Stage 3 exercises the incremental path for `loadfast_incr.R` (same temp dir, files mutated in place).
 
 ## R namespace machinery gotchas
 
