@@ -5,7 +5,7 @@
 # Requires: rlang (for namespace registry access)
 # Usage: source("loadfast.R"); load_fast()
 
-message("attaching load_fast function")
+message("Attach load_fast")
 
 .fileCache <- new.env(parent = emptyenv())
 .loading <- FALSE
@@ -76,7 +76,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     files_to_source <- files_to_source[order(basename(files_to_source))]
 
     if (length(files_to_source) == 0L) {
-      message("Nothing changed in ", r_dir)
+      message("No changes in ", r_dir)
       .source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
       .timer("TOTAL (no-change)")
       return(invisible(ns_env))
@@ -280,7 +280,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
   .fileCache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
 
-  message("Loaded ", length(r_files), " file(s) from ", r_dir)
+  message("Load ", length(r_files), " file(s) from ", r_dir)
   .timer("TOTAL (full load)")
   invisible(ns_env)
 }

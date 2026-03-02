@@ -5,7 +5,7 @@
 # Requires: rlang (for namespace registry access)
 # Usage: source("loadfast_v1.R"); loadfast_v1()
 
-message("attaching loadfast_v1 function")
+message("Attach loadfast_v1")
 
 .loadfast_v1_loading <- FALSE
 
@@ -19,7 +19,7 @@ loadfast_v1 <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full
     .t_last <- .t0
     .timer <- function(label) {
       now <- proc.time()["elapsed"]
-      message(sprintf("[load_fast] %-40s %7.3fs (cumul %7.3fs)", label, now - .t_last, now - .t0))
+      message(sprintf("[loadfast_v1] %-40s %7.3fs (cumul %7.3fs)", label, now - .t_last, now - .t0))
       .t_last <<- now
     }
   } else {
@@ -292,7 +292,7 @@ loadfast_v1 <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full
   }
   .timer("source testthat helpers")
 
-  message("Loaded ", length(r_files), " file(s) from ", r_dir)
+  message("Load ", length(r_files), " file(s) from ", r_dir)
   .timer("TOTAL")
   invisible(ns_env)
 }
