@@ -1,6 +1,11 @@
 .fileCache <- new.env(parent = emptyenv())
+.loading <- FALSE
 
 load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full = FALSE, verbose = FALSE) {
+  if (.loading) stop("load_fast() re-entrance detected — a sourced file is calling load_fast()")
+  .loading <<- TRUE
+  on.exit(.loading <<- FALSE, add = TRUE)
+
   if (verbose) {
     .t0 <- proc.time()["elapsed"]
     .t_last <- .t0
@@ -77,15 +82,8 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     }
     .timer(paste0("incr source ", length(files_to_source), " files"))
 
-    nms <- ls(ns_env, all.names = FALSE)
-    for (nm in nms) {
-      assign(nm, get(nm, envir = ns_env, inherits = FALSE), envir = pkg_env)
-    }
-    impenv <- parent.env(ns_env)
-    imp_nms <- ls(impenv, all.names = TRUE)
-    for (nm in imp_nms) {
-      assign(nm, get(nm, envir = impenv, inherits = FALSE), envir = pkg_env)
-    }
+    list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
+    list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
     .timer("incr pkg_env sync")
 
     .fileCache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
@@ -223,14 +221,8 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   .timer("attach testthat")
 
   pkg_env <- attach(NULL, name = pkg_env_name)
-  nms <- ls(ns_env, all.names = FALSE)
-  for (nm in nms) {
-    assign(nm, get(nm, envir = ns_env), envir = pkg_env)
-  }
-  imp_nms <- ls(impenv, all.names = TRUE)
-  for (nm in imp_nms) {
-    assign(nm, get(nm, envir = impenv, inherits = FALSE), envir = pkg_env)
-  }
+  list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
+  list2env(as.list(impenv, all.names = TRUE), envir = pkg_env)
   .timer("attach pkg to search path")
 
   if (isTRUE(helpers) && uses_testthat) {

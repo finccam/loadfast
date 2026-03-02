@@ -6,7 +6,25 @@
 
 message("attaching load_fast function")
 
-load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
+.load_fast_loading <- FALSE
+
+load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full = FALSE, verbose = FALSE) {
+  if (.load_fast_loading) stop("load_fast() re-entrance detected — a sourced file is calling load_fast()")
+  .load_fast_loading <<- TRUE
+  on.exit(.load_fast_loading <<- FALSE, add = TRUE)
+
+  if (verbose) {
+    .t0 <- proc.time()["elapsed"]
+    .t_last <- .t0
+    .timer <- function(label) {
+      now <- proc.time()["elapsed"]
+      message(sprintf("[load_fast] %-40s %7.3fs (cumul %7.3fs)", label, now - .t_last, now - .t0))
+      .t_last <<- now
+    }
+  } else {
+    .timer <- function(label) invisible(NULL)
+  }
+
   # --- Read package name from DESCRIPTION ---
   desc_path <- file.path(path, "DESCRIPTION")
   if (!file.exists(desc_path)) {
@@ -24,6 +42,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
 
   pkg_env_name <- paste0("package:", pkg_name)
   r_dir <- file.path(path, "R")
+  .timer("desc parsing")
 
   # --- Detach and unregister if already loaded ---
   if (pkg_env_name %in% search()) {
@@ -31,13 +50,13 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
   }
   if (pkg_name %in% loadedNamespaces()) {
     tryCatch(unloadNamespace(pkg_name), error = function(e) {
-      # Force-remove from namespace registry if normal unload fails
       reg <- rlang::ns_registry_env()
       if (exists(pkg_name, envir = reg, inherits = FALSE)) {
         rm(list = pkg_name, envir = reg)
       }
     })
   }
+  .timer("detach + unload old ns")
 
   # --- Discover R source files ---
   if (!dir.exists(r_dir)) {
@@ -51,6 +70,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
     message("No R files found in ", r_dir)
     return(invisible(NULL))
   }
+  .timer("file discovery")
 
   # --- Create a proper namespace (required for S4 setClass/setMethod) ---
   # We replicate what base::loadNamespace's internal makeNamespace() does,
@@ -83,6 +103,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
   if (isNamespaceLoaded("methods")) {
     methods::setPackageName(pkg_name, ns_env)
   }
+  .timer("create + register ns env")
 
   # --- Process NAMESPACE imports ---
   # Parse the NAMESPACE file and load imported symbols into the imports env.
@@ -96,17 +117,17 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
       dirname(abs_path),
       mustExist = FALSE
     )
+    .timer("parseNamespaceFile")
 
     # import(pkg)              -> whole-namespace import
     # importFrom(pkg, sym ...) -> selective import
     for (i in nsInfo$imports) {
+      imp_label <- if (is.character(i)) i else i[[1L]]
       tryCatch(
         {
           if (is.character(i)) {
-            # import(pkg) — import all exports
             namespaceImport(ns_env, loadNamespace(i), from = pkg_name)
           } else if (!is.null(i$except)) {
-            # import(pkg, except = ...) — import all except some
             namespaceImport(
               ns_env,
               loadNamespace(i[[1L]]),
@@ -114,7 +135,6 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
               except = i$except
             )
           } else {
-            # importFrom(pkg, sym1, sym2, ...)
             namespaceImportFrom(
               ns_env,
               loadNamespace(i[[1L]]),
@@ -133,6 +153,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
           )
         }
       )
+      .timer(paste0("  import: ", imp_label))
     }
 
     # importClassesFrom(pkg, cls1, cls2, ...)
@@ -154,6 +175,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
           )
         }
       )
+      .timer(paste0("  importClasses: ", imp[[1L]], " [", paste(imp[[2L]], collapse=","), "]"))
     }
 
     # importMethodsFrom(pkg, meth1, meth2, ...)
@@ -175,6 +197,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
           )
         }
       )
+      .timer(paste0("  importMethods: ", imp[[1L]], " [", paste(imp[[2L]], collapse=","), "]"))
     }
 
     # Convert raw parseNamespaceFile output to the canonical named-list format
@@ -227,6 +250,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
       }
     )
   }
+  .timer(paste0("source ", length(r_files), " files"))
 
   # --- Attach testthat to search path ---
   uses_testthat <- local({
@@ -240,22 +264,17 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
   if (isTRUE(attach_testthat) && pkg_name != "testthat") {
     library("testthat", warn.conflicts = FALSE)
   }
+  .timer("attach testthat")
 
   # --- Attach to search path so objects are visible ---
   pkg_env <- attach(NULL, name = pkg_env_name)
 
-  # Copy everything from the namespace into the attached package env
-  nms <- ls(ns_env, all.names = FALSE)
-  for (nm in nms) {
-    assign(nm, get(nm, envir = ns_env), envir = pkg_env)
-  }
+  list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
 
   # Copy imported symbols (from importFrom/import directives in NAMESPACE) into
   # the package env so they're available for interactive use on the search path.
-  imp_nms <- ls(impenv, all.names = TRUE)
-  for (nm in imp_nms) {
-    assign(nm, get(nm, envir = impenv, inherits = FALSE), envir = pkg_env)
-  }
+  list2env(as.list(impenv, all.names = TRUE), envir = pkg_env)
+  .timer("attach pkg to search path")
 
   # --- Source testthat helpers into pkg env ---
   if (isTRUE(helpers) && uses_testthat) {
@@ -270,7 +289,9 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL) {
       testthat::source_test_helpers(test_dir, env = pkg_env)
     }
   }
+  .timer("source testthat helpers")
 
   message("Loaded ", length(r_files), " file(s) from ", r_dir)
+  .timer("TOTAL")
   invisible(ns_env)
 }

@@ -13,11 +13,11 @@ dir.create(tmp_dir)
 on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
 
 # Deep-copy project1 into temp dir (only DESCRIPTION, NAMESPACE, R/)
-file.copy(file.path("project1", "DESCRIPTION"), tmp_dir)
-file.copy(file.path("project1", "NAMESPACE"), tmp_dir)
+invisible(file.copy(file.path("project1", "DESCRIPTION"), tmp_dir))
+invisible(file.copy(file.path("project1", "NAMESPACE"), tmp_dir))
 dir.create(file.path(tmp_dir, "R"))
 for (f in list.files(file.path("project1", "R"), full.names = TRUE)) {
-  file.copy(f, file.path(tmp_dir, "R", basename(f)))
+  invisible(file.copy(f, file.path(tmp_dir, "R", basename(f))))
 }
 
 # --- Initial full load of temp project ---
@@ -208,7 +208,7 @@ check("new-file: existing functions unaffected", quote(
 # ============================================================================
 cat("\n--- 3f: delete extras.R ---\n\n")
 
-file.remove(file.path(tmp_dir, "R", "extras.R"))
+invisible(file.remove(file.path(tmp_dir, "R", "extras.R")))
 
 ns3f <- load_fast(tmp_dir, helpers = FALSE, attach_testthat = FALSE)
 
