@@ -38,12 +38,12 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 
 ## Incremental loader (loadfast.R)
 
-- **`.fileCache`** is a module-level environment (`parent = emptyenv()`) keyed by `normalizePath(path)`. Each entry stores `list(ns_env, hashes)` where `hashes` is a named character vector of MD5 sums.
+- **`.loadfast_file_cache`** is a module-level environment (`parent = emptyenv()`) keyed by `normalizePath(path)`. Each entry stores `list(ns_env, hashes)` where `hashes` is a named character vector of MD5 sums.
 - **Change detection**: `tools::md5sum()` on all `R/*.R` files every call. Compared against cached hashes to classify files as changed or added.
 - **No per-file symbol tracking**: the incremental path does **not** track which symbols came from which file, and does **not** remove stale symbols when files are deleted or functions are removed. This avoids the O(n²) `ls()` overhead that dominated load time (27.5s of 33.6s in a 475-file project). Stale symbols linger until the user calls `load_fast(path, full = TRUE)`.
 - **Package env sync**: after incremental re-sourcing, all symbols from `ns_env` are bulk-copied to the `package:pkg` environment (one `ls()` call total).
 - **Testthat helpers**: always re-sourced on every call (simple approach — there are usually only 1-2 helper files).
-- **Re-sourcing `loadfast.R` itself** recreates `.fileCache`, losing all cached state. Next `load_fast()` call will do a full load. This is intentional.
+- **Re-sourcing `loadfast.R` itself** recreates `.loadfast_file_cache`, losing all cached state. Next `load_fast()` call will do a full load. This is intentional.
 - **`full = TRUE`** bypasses the cache lookup, forcing a full teardown+rebuild. Use this after deleting files or removing functions.
 
 ## Testing gotchas

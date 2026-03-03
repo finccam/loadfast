@@ -7,13 +7,13 @@
 
 message("Attach load_fast")
 
-.fileCache <- new.env(parent = emptyenv())
-.loading <- FALSE
+.loadfast_file_cache <- new.env(parent = emptyenv())
+.loadfast_loading <- FALSE
 
 load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full = FALSE, verbose = FALSE) {
-  if (.loading) stop("load_fast() re-entrance detected — a sourced file is calling load_fast()")
-  .loading <<- TRUE
-  on.exit(.loading <<- FALSE, add = TRUE)
+  if (.loadfast_loading) stop("load_fast() re-entrance detected — a sourced file is calling load_fast()")
+  .loadfast_loading <<- TRUE
+  on.exit(.loadfast_loading <<- FALSE, add = TRUE)
 
   if (verbose) {
     .t0 <- proc.time()["elapsed"]
@@ -53,8 +53,8 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   .timer("desc + file discovery + md5")
 
   cached <- NULL
-  if (!isTRUE(full) && exists(abs_path, envir = .fileCache, inherits = FALSE)) {
-    cached <- .fileCache[[abs_path]]
+  if (!isTRUE(full) && exists(abs_path, envir = .loadfast_file_cache, inherits = FALSE)) {
+    cached <- .loadfast_file_cache[[abs_path]]
   }
 
   can_incremental <- !is.null(cached) &&
@@ -95,7 +95,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
     .timer("incr pkg_env sync")
 
-    .fileCache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
+    .loadfast_file_cache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
 
     n_changed <- length(changed_files)
     n_added <- length(added_files)
@@ -278,7 +278,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   }
   .timer("source testthat helpers")
 
-  .fileCache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
+  .loadfast_file_cache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
 
   message("Load ", length(r_files), " file(s) from ", r_dir)
   .timer("TOTAL (full load)")
