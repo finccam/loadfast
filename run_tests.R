@@ -974,6 +974,31 @@ if (is_incr) {
     get("add", envir = ns4a)(10, 20) == 30
   ))
 
+  no_change_dot4a <- local({
+    old_wd <- getwd()
+    on.exit(setwd(old_wd), add = TRUE)
+    setwd(tmp_c)
+    capture_messages(
+      load_fast(".", helpers = FALSE, attach_testthat = FALSE)
+    )
+  })
+
+  check("no-change: display path uses package folder name when path='.'", quote(
+    any(grepl(paste0("No changes in ", basename(tmp_c), "/R"), no_change_dot4a$messages, fixed = TRUE))
+  ))
+
+  no_change_abs4a <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  check("no-change: display path uses temp package folder name for absolute paths", quote(
+    any(grepl(
+      paste0("No changes in ", basename(tmp_c), "/R"),
+      no_change_abs4a$messages,
+      fixed = TRUE
+    ))
+  ))
+
   # --- 4b: Remove a function from base.R ---
   cat("\n--- 4b: remove summarize_values from base.R ---\n\n")
 
@@ -1288,8 +1313,145 @@ if (is_incr) {
     get("add", pos = pkg_env4)(1, 2) == 2003
   ))
 
-  # --- 4i: Change renv.lock and keep warning until baseline is reset ---
-  cat("\n--- 4i: persistent renv.lock change warning ---\n\n")
+  # --- 4i: runtime patch invalidation triggers single-file reload ---
+  cat("\n--- 4i: runtime patch invalidation triggers single-file reload ---\n\n")
+
+  writeLines(c(
+    "runtime_target <- function() {",
+    "  \"original\"",
+    "}",
+    "",
+    "activate_runtime_patch <- function() {",
+    "  assign(",
+    "    \"runtime_target\",",
+    "    function() \"patched\",",
+    "    envir = environment(runtime_target)",
+    "  )",
+    "  load_fast_invalidate(",
+    "    path = ", dQuote(gsub("\\\\", "/", tmp_c)), ",",
+    "    files = \"runtime_patch.R\",",
+    "    reason = \"runtime patch test\"",
+    "  )",
+    "  invisible(NULL)",
+    "}"
+  ), file.path(tmp_c, "R", "runtime_patch.R"))
+
+  runtime_patch_load <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  check("invalidate-file: runtime patch helper file loads", quote(
+    exists("runtime_target", envir = runtime_patch_load$value, inherits = FALSE) &&
+      exists("activate_runtime_patch", envir = runtime_patch_load$value, inherits = FALSE)
+  ))
+
+  check("invalidate-file: runtime_target initially returns original", quote(
+    get("runtime_target", envir = runtime_patch_load$value)() == "original"
+  ))
+
+  get("activate_runtime_patch", envir = runtime_patch_load$value)()
+
+  check("invalidate-file: runtime patch changes live namespace state", quote(
+    get("runtime_target", envir = runtime_patch_load$value)() == "patched"
+  ))
+
+  invalidated_reload4i <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  check("invalidate-file: invalidated file is re-sourced on next load", quote(
+    get("runtime_target", envir = invalidated_reload4i$value)() == "original"
+  ))
+
+  check("invalidate-file: pkg env also reflects restored function", quote(
+    get("runtime_target", pos = pkg_env4)() == "original"
+  ))
+
+  check("invalidate-file: next load reports invalidation reason", quote(
+    any(grepl("runtime patch test", invalidated_reload4i$messages, fixed = TRUE))
+  ))
+
+  check("invalidate-file: next load reports invalidated file", quote(
+    any(grepl("runtime_patch\\.R", invalidated_reload4i$messages))
+  ))
+
+  # --- 4j: runtime S4 patch invalidation triggers single-file reload ---
+  cat("\n--- 4j: runtime S4 patch invalidation triggers single-file reload ---\n\n")
+
+  writeLines(c(
+    "setGeneric(",
+    "  \"runtime_describe_animal\",",
+    "  function(x) standardGeneric(\"runtime_describe_animal\")",
+    ")",
+    "",
+    "setMethod(",
+    "  \"runtime_describe_animal\",",
+    "  \"Animal\",",
+    "  function(x) {",
+    "    paste0(\"original:\", x@name)",
+    "  }",
+    ")",
+    "",
+    "activate_runtime_s4_patch <- function() {",
+    "  setMethod(",
+    "    \"runtime_describe_animal\",",
+    "    \"Animal\",",
+    "    function(x) {",
+    "      paste0(\"patched:\", x@name)",
+    "    }",
+    "  )",
+    "  load_fast_invalidate(",
+    "    path = ", dQuote(gsub("\\\\", "/", tmp_c)), ",",
+    "    files = \"runtime_patch_s4.R\",",
+    "    reason = \"runtime S4 patch test\"",
+    "  )",
+    "  invisible(NULL)",
+    "}"
+  ), file.path(tmp_c, "R", "runtime_patch_s4.R"))
+
+  runtime_patch_s4_load <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  a_runtime_s4 <- get("animal", envir = runtime_patch_s4_load$value)("Milo", "cat", 4)
+
+  check("invalidate-s4: runtime S4 helper file loads", quote(
+    exists("runtime_describe_animal", envir = runtime_patch_s4_load$value, inherits = FALSE) &&
+      exists("activate_runtime_s4_patch", envir = runtime_patch_s4_load$value, inherits = FALSE)
+  ))
+
+  check("invalidate-s4: S4 method initially returns original behavior", quote(
+    get("runtime_describe_animal", envir = runtime_patch_s4_load$value)(a_runtime_s4) == "original:Milo"
+  ))
+
+  get("activate_runtime_s4_patch", envir = runtime_patch_s4_load$value)()
+
+  check("invalidate-s4: runtime S4 patch changes live method behavior", quote(
+    get("runtime_describe_animal", envir = runtime_patch_s4_load$value)(a_runtime_s4) == "patched:Milo"
+  ))
+
+  invalidated_reload4j <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  check("invalidate-s4: invalidated S4 file is re-sourced on next load", quote(
+    get("runtime_describe_animal", envir = invalidated_reload4j$value)(a_runtime_s4) == "original:Milo"
+  ))
+
+  check("invalidate-s4: pkg env also reflects restored S4 method", quote(
+    get("runtime_describe_animal", pos = pkg_env4)(a_runtime_s4) == "original:Milo"
+  ))
+
+  check("invalidate-s4: next load reports S4 invalidation reason", quote(
+    any(grepl("runtime S4 patch test", invalidated_reload4j$messages, fixed = TRUE))
+  ))
+
+  check("invalidate-s4: next load reports invalidated S4 file", quote(
+    any(grepl("runtime_patch_s4\\.R", invalidated_reload4j$messages))
+  ))
+
+  # --- 4k: Change renv.lock and keep warning until baseline is reset ---
+  cat("\n--- 4k: persistent renv.lock change warning ---\n\n")
 
   old_lock <- readLines(file.path(tmp_c, "renv.lock"), warn = FALSE)
   writeLines(c(old_lock, "", " "), file.path(tmp_c, "renv.lock"))

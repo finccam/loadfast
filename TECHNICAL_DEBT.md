@@ -8,27 +8,6 @@ This document tracks known implementation debt and conscious tradeoffs in `loadf
 - The loader design is broadly sound for the target use case.
 - Most debt is in edge-case correctness and maintainability rather than basic functionality.
 
-## High-priority debt
-
-### 1. Source errors are downgraded to warnings during file sourcing
-**Why this matters**
-
-If a changed file fails to source, the loader currently warns and continues. That can leave the namespace and attached package environment in a partially updated state.
-
-In incremental mode this is riskier because a failed source can still be followed by cache updates, which means a broken file may no longer be considered changed on the next call.
-
-**Risk**
-- Partial reload state
-- Broken edit can appear "accepted"
-- Next incremental call may say "no changes" even though the file never loaded successfully
-
-**Preferred fix**
-- Treat source failures as fatal for the current `load_fast()` call
-- At minimum, do not update the incremental cache if any file failed to source
-
-**Priority**
-- High
-
 ## Medium-priority debt
 
 ### 2. Incremental cache validity is inferred too loosely
@@ -140,10 +119,9 @@ This is acceptable for the current test package and is partially mitigated by su
 
 ## Suggested implementation order
 
-1. Make source failures fail the load, or at least prevent cache updates after failed sourcing
-2. Harden incremental cache validation
-3. Store `pkg_name` in cache entries and invalidate on package identity changes
-4. Extract tiny helpers for testthat detection and package env sync if the file grows further
+1. Harden incremental cache validation
+2. Store `pkg_name` in cache entries and invalidate on package identity changes
+3. Extract tiny helpers for testthat detection and package env sync if the file grows further
 
 ## Notes for future reviewers
 
