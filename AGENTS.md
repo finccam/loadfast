@@ -22,7 +22,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
   - `tests/testthat/helper-utils.R` — testthat helper factories (`make_test_animal`, `make_test_logger`)
   - `tests/testthat/test-base.R` — testthat tests exercising all of the above
 - **`renv/`** and **`renv.lock`** manage the project-local library. Key packages: `testthat`, `R6`, `rlang`, `data.table`.
-- **`TECHNICAL_DEBT.md`** tracks known loader tradeoffs, risks, and cleanup opportunities. Update it when you identify a non-trivial issue that is worth preserving across sessions.
+- **`TECHNICAL_DEBT.md`** tracks known loader tradeoffs, risks, and cleanup opportunities. Update it when you identify a non-trivial issue that is worth preserving across sessions. Use reload-registration terminology in docs and guidance rather than cache-invalidation terminology when describing the user-facing behavior.
 - **`pkgload/`** contains the original pkgload R package source code (moved here for reference). It is NOT used at runtime.
 
 ## Shared design decisions
@@ -43,6 +43,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - **No per-file symbol tracking**: the incremental path does **not** track which symbols came from which file, and does **not** remove stale symbols when files are deleted or functions are removed. This avoids the O(n²) `ls()` overhead that dominated load time (27.5s of 33.6s in a 475-file project). Stale symbols linger until the user calls `load_fast(path, full = TRUE)`.
 - **Package env sync**: after incremental re-sourcing, all symbols from `ns_env` are bulk-copied to the `package:pkg` environment (one `ls()` call total).
 - **Testthat helpers**: always re-sourced on every call (simple approach — there are usually only 1-2 helper files).
+- **Explicit file reload registration**: runtime code can register one or more files to be reloaded on the next `load_fast()` call. In user-facing docs and messages, describe this as registering or applying a reload, not as cache invalidation.
 - **Re-sourcing `loadfast.R` itself** recreates `.loadfast_file_cache`, losing all cached state. Next `load_fast()` call will do a full load. This is intentional.
 - **`full = TRUE`** bypasses the cache lookup, forcing a full teardown+rebuild. Use this after deleting files or removing functions.
 
@@ -58,7 +59,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
     - 3a: `compute()` in `wrappers.R` calls `add()` from `base.R` — change only `base.R`, verify `compute()` output changes.
     - 3b: `describe_loud()` in `wrappers.R` calls `describe()` generic from `s4_classes.R` — change only the method, verify `describe_loud()` output changes. Also tests `callNextMethod` chain for `Pet`.
     - 3c: `make_animal()` in `wrappers.R` calls `new("Animal",...)` — add `age` slot to the class in `s4_classes.R`, verify the unchanged constructor returns an object with the new slot.
-  - **Stage 4**: Copy `devpackage/` to a third temp dir, test incremental-specific behaviors: no-change short-circuit, function removal (stale symbols linger), function addition, function modification, new file, file deletion, explicit file invalidation, failed incremental reload recovery, and runtime S4 method patch invalidation. Verifies that `full = TRUE` properly cleans up stale symbols.
+  - **Stage 4**: Copy `devpackage/` to a third temp dir, test incremental-specific behaviors: no-change short-circuit, function removal (stale symbols linger), function addition, function modification, new file, file deletion, explicit file reload registration, failed incremental reload recovery, and runtime S4 method patch reload registration. Verifies that `full = TRUE` properly cleans up stale symbols.
 - Stage 2 always triggers a full load (different path from Stage 1 = cache miss). Stage 3 exercises the incremental path for `loadfast.R` (same temp dir, files mutated in place).
 
 ## R namespace machinery gotchas

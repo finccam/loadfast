@@ -10,7 +10,7 @@ This document tracks known implementation debt and conscious tradeoffs in `loadf
 
 ## Medium-priority debt
 
-### 2. Incremental cache validity is inferred too loosely
+### 1. Incremental cache validity is inferred too loosely
 **Why this matters**
 
 Incremental reload currently checks whether:
@@ -31,7 +31,7 @@ That does not fully prove that the cached namespace env is still the active regi
 **Priority**
 - Medium
 
-### 3. Cache is keyed only by normalized path
+### 2. Cache is keyed only by normalized path
 **Why this matters**
 
 If the `Package:` field in `DESCRIPTION` changes in place for the same directory, the path-based cache may no longer describe the same logical package.
@@ -48,7 +48,7 @@ If the `Package:` field in `DESCRIPTION` changes in place for the same directory
 
 ## Low-priority debt
 
-### 4. Testthat detection logic is duplicated
+### 3. Testthat detection logic is duplicated
 **Why this matters**
 
 Logic for detecting testthat usage and helper sourcing is repeated in multiple places. The runtime cost is trivial, but the duplication increases maintenance cost.
@@ -63,7 +63,7 @@ Logic for detecting testthat usage and helper sourcing is repeated in multiple p
 **Priority**
 - Low
 
-### 5. Package env sync logic is duplicated conceptually
+### 4. Package env sync logic is duplicated conceptually
 **Why this matters**
 
 The full-load and incremental-load paths both bulk-copy namespace and imports into the attached package env. The duplication is reasonable, but it is a maintenance seam.

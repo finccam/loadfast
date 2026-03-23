@@ -17,6 +17,8 @@ load_fast("path/to/your/package")
 
 On first call it does a full teardown+rebuild. On subsequent calls for the same path it re-sources only files whose MD5 hash changed. Pass `full = TRUE` to force a complete rebuild (needed after deleting files or removing functions).
 
+If runtime code needs a specific file to be re-sourced on the next load, call `load_fast_register_reload()` to register that file for reload. This is useful for cases like runtime patching or temporary method overrides.
+
 If `renv.lock` changes between incremental loads for the same package path, `load_fast()` warns. Dependency changes may require restarting R or reinstalling packages.
 
 ## Recommended setup

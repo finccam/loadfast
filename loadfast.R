@@ -95,8 +95,8 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     pkg_env <- as.environment(pkg_env_name)
     old_hashes <- cached$hashes
     old_lock_hash <- if (is.null(cached$lock_hash)) NA_character_ else cached$lock_hash
-    invalidated_files <- if (is.null(cached$invalidated_files)) character(0) else cached$invalidated_files
-    pending_invalidation_message <- if (is.null(cached$pending_invalidation_message)) NULL else cached$pending_invalidation_message
+    registered_reload_files <- if (is.null(cached$registered_reload_files)) character(0) else cached$registered_reload_files
+    pending_reload_message <- if (is.null(cached$pending_reload_message)) NULL else cached$pending_reload_message
 
     if (!identical(current_lock_hash, old_lock_hash)) {
       warning(
@@ -113,25 +113,25 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
     old_files_cmp <- chartr("\\", "/", old_files)
     new_files_cmp <- chartr("\\", "/", new_files)
-    invalidated_files_cmp <- chartr("\\", "/", invalidated_files)
+    registered_reload_files_cmp <- chartr("\\", "/", registered_reload_files)
 
-    invalidated_existing_files <- new_files[new_files_cmp %in% intersect(new_files_cmp, invalidated_files_cmp)]
-    invalidated_added_files <- setdiff(invalidated_files_cmp, old_files_cmp)
-    invalidated_added_files <- new_files[new_files_cmp %in% intersect(new_files_cmp, invalidated_added_files)]
+    registered_existing_reload_files <- new_files[new_files_cmp %in% intersect(new_files_cmp, registered_reload_files_cmp)]
+    registered_added_reload_files <- setdiff(registered_reload_files_cmp, old_files_cmp)
+    registered_added_reload_files <- new_files[new_files_cmp %in% intersect(new_files_cmp, registered_added_reload_files)]
 
-    files_to_source <- unique(c(changed_files, added_files, invalidated_existing_files, invalidated_added_files))
+    files_to_source <- unique(c(changed_files, added_files, registered_existing_reload_files, registered_added_reload_files))
     files_to_source <- files_to_source[order(basename(files_to_source), files_to_source)]
 
     if (length(files_to_source) == 0L) {
-      if (!is.null(pending_invalidation_message)) {
-        message(pending_invalidation_message)
+      if (!is.null(pending_reload_message)) {
+        message(pending_reload_message)
       }
       .loadfast.cache[[abs_path]] <- list(
         ns_env = ns_env,
         hashes = current_hashes,
         lock_hash = old_lock_hash,
-        invalidated_files = character(0),
-        pending_invalidation_message = NULL
+        registered_reload_files = character(0),
+        pending_reload_message = NULL
       )
       message("No changes in ", r_dir_display, ".")
       .loadfast.source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
@@ -156,17 +156,17 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       ns_env = ns_env,
       hashes = current_hashes,
       lock_hash = old_lock_hash,
-      invalidated_files = character(0),
-      pending_invalidation_message = NULL
+      registered_reload_files = character(0),
+      pending_reload_message = NULL
     )
 
     n_changed <- length(changed_files)
     n_added <- length(added_files)
-    n_invalidated <- length(unique(c(invalidated_existing_files, invalidated_added_files)))
+    n_registered_reloads <- length(unique(c(registered_existing_reload_files, registered_added_reload_files)))
     parts <- character()
     if (n_changed > 0L) parts <- c(parts, paste0(n_changed, " changed"))
     if (n_added > 0L) parts <- c(parts, paste0(n_added, " added"))
-    if (n_invalidated > 0L) parts <- c(parts, paste0(n_invalidated, " invalidated"))
+    if (n_registered_reloads > 0L) parts <- c(parts, paste0(n_registered_reloads, " registered reload"))
 
     changed_display <- basename(files_to_source)
     if (length(changed_display) > 5L) {
@@ -176,8 +176,8 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       )
     }
 
-    if (!is.null(pending_invalidation_message)) {
-      message(pending_invalidation_message)
+    if (!is.null(pending_reload_message)) {
+      message(pending_reload_message)
     }
 
     message(
@@ -366,8 +366,8 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     ns_env = ns_env,
     hashes = current_hashes,
     lock_hash = current_lock_hash,
-    invalidated_files = character(0),
-    pending_invalidation_message = NULL
+    registered_reload_files = character(0),
+    pending_reload_message = NULL
   )
 
   message("Load ", length(r_files), " file(s) from ", r_dir_display, ".")
@@ -375,29 +375,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   invisible(ns_env)
 }
 
-.loadfast.source_one <- function(f, ns_env) {
-  s4_pattern <- "no definition for class"
-  tryCatch(
-    withCallingHandlers(
-      sys.source(f, envir = ns_env, keep.source = TRUE),
-      warning = function(w) {
-        if (grepl(s4_pattern, conditionMessage(w), fixed = TRUE)) {
-          invokeRestart("muffleWarning")
-        }
-      },
-      message = function(m) {
-        if (grepl(s4_pattern, conditionMessage(m), fixed = TRUE)) {
-          invokeRestart("muffleMessage")
-        }
-      }
-    ),
-    error = function(e) {
-      stop("Failed to source ", f, ": ", conditionMessage(e), call. = FALSE)
-    }
-  )
-}
-
-load_fast_invalidate <- function(path = ".", files, reason = NULL) {
+load_fast_register_reload <- function(path = ".", files, reason = NULL) {
   if (missing(files) || length(files) == 0L) stop("'files' must contain at least one path")
 
   if (identical(path, ".")) {
@@ -438,21 +416,50 @@ load_fast_invalidate <- function(path = ".", files, reason = NULL) {
   }
 
   cached <- .loadfast.cache[[abs_path]]
-  invalidated_files <- unique(c(cached$invalidated_files, file_paths))
-  invalidated_display <- file_inputs[match(invalidated_files, file_paths)]
-  invalidated_display <- invalidated_display[!is.na(invalidated_display)]
+  registered_reload_files <- unique(c(cached$registered_reload_files, file_paths))
+  registered_reload_display <- file_inputs[match(registered_reload_files, file_paths)]
+  registered_reload_display <- registered_reload_display[!is.na(registered_reload_display)]
 
-  message_text <- paste0(
-    "Applying requested invalidation: ",
-    paste(invalidated_display, collapse = ", "),
+  registration_message <- paste0(
+    "Registered file ",
+    paste(sprintf("'%s'", registered_reload_display), collapse = ", "),
+    " for reload",
+    if (is.null(reason) || !nzchar(reason)) "." else paste0(" (", reason, ").")
+  )
+  apply_message <- paste0(
+    "Applying registered reload for ",
+    paste(sprintf("'%s'", registered_reload_display), collapse = ", "),
     if (is.null(reason) || !nzchar(reason)) "." else paste0(" (", reason, ").")
   )
 
-  cached$invalidated_files <- invalidated_files
-  cached$pending_invalidation_message <- message_text
+  cached$registered_reload_files <- registered_reload_files
+  cached$pending_reload_message <- apply_message
   .loadfast.cache[[abs_path]] <- cached
 
+  message(registration_message)
   invisible(TRUE)
+}
+
+.loadfast.source_one <- function(f, ns_env) {
+  s4_pattern <- "no definition for class"
+  tryCatch(
+    withCallingHandlers(
+      sys.source(f, envir = ns_env, keep.source = TRUE),
+      warning = function(w) {
+        if (grepl(s4_pattern, conditionMessage(w), fixed = TRUE)) {
+          invokeRestart("muffleWarning")
+        }
+      },
+      message = function(m) {
+        if (grepl(s4_pattern, conditionMessage(m), fixed = TRUE)) {
+          invokeRestart("muffleMessage")
+        }
+      }
+    ),
+    error = function(e) {
+      stop("Failed to source ", f, ": ", conditionMessage(e), call. = FALSE)
+    }
+  )
 }
 
 .loadfast.source_helpers <- function(abs_path, pkg_env, helpers, attach_testthat, pkg_name) {

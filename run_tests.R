@@ -1401,7 +1401,7 @@ writeLines(c(
   "    function() \"patched\",",
   "    envir = environment(runtime_target)",
   "  )",
-  "  load_fast_invalidate(",
+  "  load_fast_register_reload(",
   "    path = ", dQuote(gsub("\\\\", "/", tmp_c)), ",",
   "    files = \"runtime_patch.R\",",
   "    reason = \"runtime patch test\"",
@@ -1441,11 +1441,15 @@ check("invalidate-file: pkg env also reflects restored function", quote(
   get("runtime_target", pos = pkg_env4)() == "original"
 ))
 
-check("invalidate-file: next load reports invalidation reason", quote(
+check("reload-file: next load reports reload application", quote(
+  any(grepl("Applying registered reload for", invalidated_reload4i$messages, fixed = TRUE))
+))
+
+check("reload-file: next load reports reload reason", quote(
   any(grepl("runtime patch test", invalidated_reload4i$messages, fixed = TRUE))
 ))
 
-check("invalidate-file: next load reports invalidated file", quote(
+check("reload-file: next load reports registered file", quote(
   any(grepl("runtime_patch\\.R", invalidated_reload4i$messages))
 ))
 
@@ -1474,7 +1478,7 @@ writeLines(c(
   "      paste0(\"patched:\", x@name)",
   "    }",
   "  )",
-  "  load_fast_invalidate(",
+  "  load_fast_register_reload(",
   "    path = ", dQuote(gsub("\\\\", "/", tmp_c)), ",",
   "    files = \"runtime_patch_s4.R\",",
   "    reason = \"runtime S4 patch test\"",
@@ -1516,11 +1520,15 @@ check("invalidate-s4: pkg env also reflects restored S4 method", quote(
   get("runtime_describe_animal", pos = pkg_env4)(a_runtime_s4) == "original:Milo"
 ))
 
-check("invalidate-s4: next load reports S4 invalidation reason", quote(
+check("reload-s4: next load reports S4 reload application", quote(
+  any(grepl("Applying registered reload for", invalidated_reload4j$messages, fixed = TRUE))
+))
+
+check("reload-s4: next load reports S4 reload reason", quote(
   any(grepl("runtime S4 patch test", invalidated_reload4j$messages, fixed = TRUE))
 ))
 
-check("invalidate-s4: next load reports invalidated S4 file", quote(
+check("reload-s4: next load reports registered S4 file", quote(
   any(grepl("runtime_patch_s4\\.R", invalidated_reload4j$messages))
 ))
 
