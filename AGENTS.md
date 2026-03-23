@@ -24,6 +24,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
   - `tests/testthat/helper-utils.R` — testthat helper factories (`make_test_animal`, `make_test_logger`)
   - `tests/testthat/test-base.R` — testthat tests exercising all of the above
 - **`renv/`** and **`renv.lock`** manage the project-local library. Key packages: `testthat`, `R6`, `rlang`, `data.table`.
+- **`TECHNICAL_DEBT.md`** tracks known loader tradeoffs, risks, and cleanup opportunities. Update it when you identify a non-trivial issue that is worth preserving across sessions.
 - **`pkgload/`** contains the original pkgload R package source code (moved here for reference). It is NOT used at runtime.
 
 ## Shared design decisions (loadfast.R and loadfast_v1.R)
