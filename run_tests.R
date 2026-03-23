@@ -78,6 +78,33 @@ copy_baseline <- function(dest) {
   .tmp_dirs <<- c(.tmp_dirs, dest)
 }
 
+replace_description_field <- function(desc_path, field, replacement_lines) {
+  lines <- readLines(desc_path, warn = FALSE)
+  start_idx <- grep(paste0("^", field, ":"), lines)
+
+  if (length(start_idx) == 0L) {
+    writeLines(c(lines, replacement_lines), desc_path)
+    return(invisible(NULL))
+  }
+
+  if (length(start_idx) != 1L) stop("Expected at most one ", field, " field in DESCRIPTION")
+  start_idx <- start_idx[[1L]]
+
+  end_idx <- start_idx
+  while (end_idx < length(lines) && grepl("^[[:space:]]", lines[end_idx + 1L])) {
+    end_idx <- end_idx + 1L
+  }
+
+  writeLines(
+    c(
+      lines[seq_len(start_idx - 1L)],
+      replacement_lines,
+      lines[(end_idx + 1L):length(lines)]
+    ),
+    desc_path
+  )
+}
+
 # ============================================================================
 # STAGE 1: Load frozen devpackage baseline
 # ============================================================================
@@ -925,6 +952,57 @@ check("xdep-s4class: full=TRUE other slots still correct", quote(
 a3c_aged <- get("animal", envir = ns3c_full)("Old Rex", "dog", 4, 12)
 check("xdep-s4class: full=TRUE animal() constructor accepts age param", quote(
   a3c_aged@age == 12
+))
+
+# ============================================================================
+# STAGE 3d: Collate-aware load ordering
+# ============================================================================
+cat("\n--- 3d: Collate-aware load ordering ---\n\n")
+
+tmp_d <- tempfile("loadfast_s3_collate_")
+copy_baseline(tmp_d)
+
+replace_description_field(
+  file.path(tmp_d, "DESCRIPTION"),
+  "Collate",
+  c(
+    "Collate:",
+    "    'zzz_helper.R'",
+    "    'aaa_consumer.R'",
+    "    'base.R'",
+    "    's4_classes.R'",
+    "    'r6_classes.R'"
+  )
+)
+
+writeLines(c(
+  "collate_helper <- function(x) {",
+  "  paste0(\"helper:\", x)",
+  "}"
+), file.path(tmp_d, "R", "zzz_helper.R"))
+
+writeLines(c(
+  "collate_consumer <- function(x) {",
+  "  collate_helper(x)",
+  "}"
+), file.path(tmp_d, "R", "aaa_consumer.R"))
+
+ns3d <- load_fast(tmp_d, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("collate: helper exists after collate-ordered load", quote(
+  exists("collate_helper", envir = ns3d, inherits = FALSE)
+))
+
+check("collate: consumer exists after collate-ordered load", quote(
+  exists("collate_consumer", envir = ns3d, inherits = FALSE)
+))
+
+check("collate: consumer can call helper despite alphabetical mis-order", quote(
+  get("collate_consumer", envir = ns3d)("ok") == "helper:ok"
+))
+
+check("collate: consumer is visible from attached env", quote(
+  get("collate_consumer", pos = "package:devpackage")("env") == "helper:env"
 ))
 
 # ============================================================================

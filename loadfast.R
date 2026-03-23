@@ -41,18 +41,33 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
   desc_path <- file.path(abs_path, "DESCRIPTION")
   if (!file.exists(desc_path)) stop("DESCRIPTION file not found at: ", desc_path)
-  desc_lines <- readLines(desc_path, warn = FALSE)
-  pkg_line <- grep("^Package:\\s*", desc_lines, value = TRUE)
-  if (length(pkg_line) == 0L) stop("No 'Package:' field found in DESCRIPTION")
-  pkg_name <- trimws(sub("^Package:\\s*", "", pkg_line[1L]))
-  if (nchar(pkg_name) == 0L) stop("'Package:' field in DESCRIPTION is empty")
+  desc_fields <- read.dcf(desc_path)
+  pkg_name <- if ("Package" %in% colnames(desc_fields)) trimws(desc_fields[1L, "Package"]) else ""
+  if (!nzchar(pkg_name)) stop("No valid 'Package' field found in DESCRIPTION")
 
   pkg_env_name <- paste0("package:", pkg_name)
   r_dir <- file.path(abs_path, "R")
   if (!dir.exists(r_dir)) stop("Directory does not exist: ", r_dir_display)
 
   r_files <- list.files(r_dir, pattern = "\\.[Rr]$", full.names = TRUE)
-  r_files <- r_files[order(basename(r_files))]
+  collate_value <- if ("Collate" %in% colnames(desc_fields)) trimws(desc_fields[1L, "Collate"]) else ""
+  if (nzchar(collate_value)) {
+    collate_entries <- trimws(scan(
+      text = collate_value,
+      what = character(),
+      quiet = TRUE,
+      quote = "'\""
+    ))
+    collate_entries <- collate_entries[nzchar(collate_entries)]
+    collate_files <- normalizePath(file.path(r_dir, collate_entries), mustWork = FALSE)
+    existing_collate_files <- unique(collate_files[file.exists(collate_files)])
+    r_files_norm <- normalizePath(r_files, mustWork = TRUE)
+    remaining_files <- r_files[!(r_files_norm %in% existing_collate_files)]
+    remaining_files <- remaining_files[order(basename(remaining_files))]
+    r_files <- c(existing_collate_files, remaining_files)
+  } else {
+    r_files <- r_files[order(basename(r_files))]
+  }
   if (length(r_files) == 0L) {
     message("No R files found in ", r_dir_display, ".")
     return(invisible(NULL))
