@@ -103,7 +103,8 @@ These base R functions place objects into the **parent** of the namespace env (t
 ## System-specific notes
 
 - **OS**: Windows
-- **R version**: 4.2.2
+- **R version**: 4.5.2
+- **`system.time()` overhead can become surprisingly large when there are ~5000+ names in scope** (for example in a large attached package / namespace such as `finccamengine`). A nested call like `system.time(system.time(1 + 1))` takes about **~0.03s before `load_all()` / `load_fast()`** but can take **~0.5s after loading**. Because the timing function itself becomes expensive in that state, **do not show timings in non-verbose mode**; keep timing output behind `verbose = TRUE`.
 - **Multiline `Rscript -e`** commands with heredocs or complex quoting frequently **segfault** on this system. Prefer single-line commands or writing to a temp `.R` file and running `Rscript path/to/file.R`.
 - **pkgload and devtools are NOT installed** in the system library, but are available in the renv project library. The renv library also provides testthat, R6, and their dependencies.
 
