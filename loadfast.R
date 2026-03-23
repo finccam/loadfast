@@ -411,7 +411,7 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
   }
 
   if (!exists(abs_path, envir = .loadfast.cache, inherits = FALSE)) {
-    message("No active load_fast cache for ", abs_path, "; invalidation ignored")
+    message("No active load_fast cache for ", abs_path, "; reload registration ignored")
     return(invisible(FALSE))
   }
 

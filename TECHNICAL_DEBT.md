@@ -94,13 +94,14 @@ When `renv.lock` changes, incremental reload continues to warn on later calls un
 
 This is intentional and tested. It favors making dependency drift obvious over silently accepting a new lockfile baseline.
 
-### 3. File ordering is alphabetical rather than `Collate`-aware
-The loader sources `R/*.R` in alphabetical filename order.
+### 3. `Collate` support is intentionally narrow
+The loader now respects the `Collate` field from `DESCRIPTION` when ordering `R/*.R` files, and this behavior is covered by the test suite.
 
-This is acceptable for the current test package and is partially mitigated by suppressing the harmless S4 "no definition for class" notices that arise from some ordering situations. But it is still a semantic difference from full package loading behavior for packages that rely on `Collate`.
+This is still intentionally lightweight rather than a full reproduction of every package-loading edge case. Future changes should preserve the current `Collate` behavior without overcomplicating the single-file design.
 
 **Current rule**
-- Treat this as a scope limitation unless support for `Collate` becomes a project goal
+- Treat `Collate` ordering for `R/*.R` as supported behavior
+- Be cautious about expanding this area unless a concrete incompatibility appears
 
 ## Suggested implementation order
 

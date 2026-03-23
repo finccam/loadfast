@@ -35,7 +35,13 @@ if (identical(Sys.getenv("FINCCAM_LOADFAST_ENABLED"), "true")) {
 
 ## Tests
 
+Use the single entry-point test script:
+
 ```sh
 cd loadfast
 Rscript test_loadfast.R
 ```
+
+`test_loadfast.R` is the only test command you should run directly. It sources `loadfast.R` and then sources `run_tests.R`.
+
+`run_tests.R` is the internal unified test suite implementation. It exists to keep the top-level runner small and the full test logic in one place.
