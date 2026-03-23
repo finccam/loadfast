@@ -339,7 +339,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       }
     ),
     error = function(e) {
-      warning("Failed to source ", f, ": ", conditionMessage(e), call. = FALSE)
+      stop("Failed to source ", f, ": ", conditionMessage(e), call. = FALSE)
     }
   )
 }

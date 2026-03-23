@@ -1221,8 +1221,75 @@ if (is_incr) {
     !any(grepl("bulk_06\\.R|bulk_07\\.R|bulk_08\\.R|bulk_09\\.R|bulk_10\\.R|bulk_11\\.R|bulk_12\\.R", reload4g$messages))
   ))
 
-  # --- 4h: Change renv.lock and keep warning until baseline is reset ---
-  cat("\n--- 4h: persistent renv.lock change warning ---\n\n")
+  # --- 4h: failed incremental reload must not advance cache ---
+  cat("\n--- 4h: failed incremental reload preserves prior state ---\n\n")
+
+  writeLines(c(
+    "add <- function(a, b) {",
+    "  a + b + 1000",
+    "}",
+    "",
+    "BROKEN_PARSE <- (",
+    "",
+    "scale_vector <- function(x, factor = 1) {",
+    "  x * factor",
+    "}",
+    "",
+    "multiply <- function(a, b) {",
+    "  a * b",
+    "}"
+  ), file.path(tmp_c, "R", "base.R"))
+
+  failed_reload4h <- tryCatch(
+    list(value = load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE), error = NULL),
+    error = function(e) list(value = NULL, error = e)
+  )
+
+  check("failed-reload: incremental reload errors on broken source file", quote(
+    inherits(failed_reload4h$error, "error")
+  ))
+
+  check("failed-reload: existing namespace state is preserved after failed reload", quote(
+    get("add", envir = ns4f_full)(1, 2) == 1003
+  ))
+
+  check("failed-reload: attached pkg env still has prior add() after failed reload", quote(
+    get("add", pos = pkg_env4)(1, 2) == 1003
+  ))
+
+  check("failed-reload: error reports the broken source file", quote(
+    grepl("base\\.R", conditionMessage(failed_reload4h$error)) ||
+      grepl("unexpected", conditionMessage(failed_reload4h$error), fixed = TRUE)
+  ))
+
+  writeLines(c(
+    "add <- function(a, b) {",
+    "  a + b + 2000",
+    "}",
+    "",
+    "scale_vector <- function(x, factor = 1) {",
+    "  x * factor",
+    "}",
+    "",
+    "multiply <- function(a, b) {",
+    "  a * b",
+    "}"
+  ), file.path(tmp_c, "R", "base.R"))
+
+  recovered_reload4h <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  check("failed-reload: fixed file is retried on next incremental load", quote(
+    get("add", envir = recovered_reload4h$value)(1, 2) == 2003
+  ))
+
+  check("failed-reload: pkg env updates after successful retry", quote(
+    get("add", pos = pkg_env4)(1, 2) == 2003
+  ))
+
+  # --- 4i: Change renv.lock and keep warning until baseline is reset ---
+  cat("\n--- 4i: persistent renv.lock change warning ---\n\n")
 
   old_lock <- readLines(file.path(tmp_c, "renv.lock"), warn = FALSE)
   writeLines(c(old_lock, "", " "), file.path(tmp_c, "renv.lock"))
