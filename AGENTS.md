@@ -13,10 +13,8 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 
 - This repo **is** the source-of-truth edit target for `loadfast`. If you are changing loader behavior, docs, or tests for `loadfast`, make the change here. Downstream repos should copy-paste `loadfast.R` from this repo rather than maintain divergent local edits.
 - **`loadfast.R`** (top-level) is the standalone replacement for `devtools::load_all()` with MD5-based incremental reloading. On first call does a full teardown+rebuild; on subsequent calls for the same path re-sources only files whose MD5 hash changed. The canonical upstream source lives at `https://github.com/finccam-com/loadfast/`. This file is intended to be copy-pasted into every repo that uses it. See "Incremental loader" section below.
-- **`loadfast_v1.R`** (top-level) is the initial implementation without incremental reload support. Always does a full teardown+rebuild on every call. Superseded by `loadfast.R`. The function is named `loadfast_v1()`.
-- **`run_tests.R`** — unified test suite containing all stages. Expects `load_fast()` to already be defined and `.loader_name` to be set by the wrapper script. Stage 4 (incremental-specific) runs only when `.loader_name == "loadfast"`.
-- **`test_loadfast.R`** — thin wrapper: sources `loadfast.R`, sets `.loader_name <- "loadfast"`, sources `run_tests.R`.
-- **`test_loadfast_v1.R`** — thin wrapper: sources `loadfast_v1.R`, aliases `loadfast_v1` to `load_fast`, sets `.loader_name <- "loadfast_v1"`, sources `run_tests.R`.
+- **`run_tests.R`** — unified test suite containing all stages for `loadfast.R`. Expects `load_fast()` to already be defined by the wrapper script.
+- **`test_loadfast.R`** — thin wrapper: sources `loadfast.R`, then sources `run_tests.R`.
 - **`devpackage/`** is the single frozen baseline package snapshot used by the tests. Contains `DESCRIPTION`, `NAMESPACE`, `R/` (source files), and `tests/testthat/` (testthat tests + helpers). Package name is `devpackage`. All code mutations for reload/incremental testing are applied ad-hoc to temp copies at test time.
   - `R/base.R` — plain functions (`add`, `scale_vector`, `summarize_values`, `mutate_dt`) — `mutate_dt` exercises `data.table`'s `:=` and `as.data.table` via `importFrom`
   - `R/s4_classes.R` — S4 classes (`Animal`, `Pet`), generics, methods
@@ -27,7 +25,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - **`TECHNICAL_DEBT.md`** tracks known loader tradeoffs, risks, and cleanup opportunities. Update it when you identify a non-trivial issue that is worth preserving across sessions.
 - **`pkgload/`** contains the original pkgload R package source code (moved here for reference). It is NOT used at runtime.
 
-## Shared design decisions (loadfast.R and loadfast_v1.R)
+## Shared design decisions
 
 - The package name is **read from the `Package:` field in DESCRIPTION**. No hard-coding required — just set the field in your DESCRIPTION file.
 - `load_fast(path)` takes a **path to a package root** (a directory containing `DESCRIPTION`, `NAMESPACE`, and `R/`). It does not assume `.`.
@@ -60,8 +58,8 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
     - 3a: `compute()` in `wrappers.R` calls `add()` from `base.R` — change only `base.R`, verify `compute()` output changes.
     - 3b: `describe_loud()` in `wrappers.R` calls `describe()` generic from `s4_classes.R` — change only the method, verify `describe_loud()` output changes. Also tests `callNextMethod` chain for `Pet`.
     - 3c: `make_animal()` in `wrappers.R` calls `new("Animal",...)` — add `age` slot to the class in `s4_classes.R`, verify the unchanged constructor returns an object with the new slot.
-  - **Stage 4** (incremental only): Copy `devpackage/` to a third temp dir, test incremental-specific behaviors: no-change short-circuit, function removal (stale symbols linger), function addition, function modification, new file, file deletion. Verifies that `full = TRUE` properly cleans up stale symbols.
-- Stage 2 always triggers a full load for both loaders (different path from Stage 1 = cache miss for the incremental loader). Stage 3 exercises the incremental path for `loadfast.R` (same temp dir, files mutated in place).
+  - **Stage 4**: Copy `devpackage/` to a third temp dir, test incremental-specific behaviors: no-change short-circuit, function removal (stale symbols linger), function addition, function modification, new file, file deletion, explicit file invalidation, failed incremental reload recovery, and runtime S4 method patch invalidation. Verifies that `full = TRUE` properly cleans up stale symbols.
+- Stage 2 always triggers a full load (different path from Stage 1 = cache miss). Stage 3 exercises the incremental path for `loadfast.R` (same temp dir, files mutated in place).
 
 ## R namespace machinery gotchas
 

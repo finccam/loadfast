@@ -1,8 +1,5 @@
-# run_tests.R — unified test suite for loadfast / loadfast_v1
+# run_tests.R — test suite for loadfast
 # Expects load_fast() to be already defined (sourced by the wrapper script).
-# Expects .loader_name to be set by the wrapper ("loadfast" or "loadfast_v1").
-
-is_incr <- exists(".loader_name") && .loader_name == "loadfast"
 
 passed <- 0L
 failed <- 0L
@@ -931,559 +928,557 @@ check("xdep-s4class: full=TRUE animal() constructor accepts age param", quote(
 ))
 
 # ============================================================================
-# STAGE 4: Incremental-specific tests (only for loadfast_incr)
-#   These test behaviors unique to the incremental loader: no-change
+# STAGE 4: Incremental-specific tests
+#   These test behaviors are unique to the incremental loader: no-change
 #   short-circuit, stale symbol lingering, and full=TRUE cleanup.
 # ============================================================================
-if (is_incr) {
-  cat("\n--- Stage 4: incremental-specific tests ---\n\n")
+cat("\n--- Stage 4: incremental-specific tests ---\n\n")
 
-  tmp_c <- tempfile("loadfast_s4_")
-  copy_baseline(tmp_c)
+tmp_c <- tempfile("loadfast_s4_")
+copy_baseline(tmp_c)
 
-  pkg_env4 <- "package:devpackage"
+pkg_env4 <- "package:devpackage"
 
-  ns4 <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+ns4 <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
 
-  check("incr-setup: full load works", quote(
-    is.environment(ns4) && isNamespace(ns4)
-  ))
+check("incr-setup: full load works", quote(
+  is.environment(ns4) && isNamespace(ns4)
+))
 
-  check("incr-setup: add(1,2) returns 3", quote(
-    get("add", envir = ns4)(1, 2) == 3
-  ))
+check("incr-setup: add(1,2) returns 3", quote(
+  get("add", envir = ns4)(1, 2) == 3
+))
 
-  check("incr-setup: summarize_values exists", quote(
-    exists("summarize_values", envir = ns4, inherits = FALSE)
-  ))
+check("incr-setup: summarize_values exists", quote(
+  exists("summarize_values", envir = ns4, inherits = FALSE)
+))
 
-  check("incr-setup: scale_vector exists", quote(
-    exists("scale_vector", envir = ns4, inherits = FALSE)
-  ))
+check("incr-setup: scale_vector exists", quote(
+  exists("scale_vector", envir = ns4, inherits = FALSE)
+))
 
-  # --- 4a: No change — second load should short-circuit ---
-  cat("\n--- 4a: no-change reload ---\n\n")
+# --- 4a: No change — second load should short-circuit ---
+cat("\n--- 4a: no-change reload ---\n\n")
 
-  ns4a <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+ns4a <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
 
-  check("no-change: returns same ns_env", quote(
-    identical(ns4a, ns4)
-  ))
+check("no-change: returns same ns_env", quote(
+  identical(ns4a, ns4)
+))
 
-  check("no-change: add still works", quote(
-    get("add", envir = ns4a)(10, 20) == 30
-  ))
+check("no-change: add still works", quote(
+  get("add", envir = ns4a)(10, 20) == 30
+))
 
-  no_change_dot4a <- local({
-    old_wd <- getwd()
-    on.exit(setwd(old_wd), add = TRUE)
-    setwd(tmp_c)
-    capture_messages(
-      load_fast(".", helpers = FALSE, attach_testthat = FALSE)
-    )
-  })
-
-  check("no-change: display path uses package folder name when path='.'", quote(
-    any(grepl(paste0("No changes in ", basename(tmp_c), "/R"), no_change_dot4a$messages, fixed = TRUE))
-  ))
-
-  no_change_abs4a <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+no_change_dot4a <- local({
+  old_wd <- getwd()
+  on.exit(setwd(old_wd), add = TRUE)
+  setwd(tmp_c)
+  capture_messages(
+    load_fast(".", helpers = FALSE, attach_testthat = FALSE)
   )
+})
 
-  check("no-change: display path uses temp package folder name for absolute paths", quote(
-    any(grepl(
-      paste0("No changes in ", basename(tmp_c), "/R"),
-      no_change_abs4a$messages,
-      fixed = TRUE
-    ))
+check("no-change: display path uses package folder name when path='.'", quote(
+  any(grepl(paste0("No changes in ", basename(tmp_c), "/R"), no_change_dot4a$messages, fixed = TRUE))
+))
+
+no_change_abs4a <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("no-change: display path uses temp package folder name for absolute paths", quote(
+  any(grepl(
+    paste0("No changes in ", basename(tmp_c), "/R"),
+    no_change_abs4a$messages,
+    fixed = TRUE
   ))
+))
 
-  # --- 4b: Remove a function from base.R ---
-  cat("\n--- 4b: remove summarize_values from base.R ---\n\n")
+# --- 4b: Remove a function from base.R ---
+cat("\n--- 4b: remove summarize_values from base.R ---\n\n")
 
-  writeLines(c(
-    "add <- function(a, b) {",
-    "  a + b",
-    "}",
-    "",
-    "scale_vector <- function(x, factor = 1) {",
-    "  x * factor",
-    "}"
-  ), file.path(tmp_c, "R", "base.R"))
+writeLines(c(
+  "add <- function(a, b) {",
+  "  a + b",
+  "}",
+  "",
+  "scale_vector <- function(x, factor = 1) {",
+  "  x * factor",
+  "}"
+), file.path(tmp_c, "R", "base.R"))
 
-  reload4b <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+reload4b <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+ns4b <- reload4b$value
+
+check("remove-fn: summarize_values lingers (no stale cleanup)", quote(
+  exists("summarize_values", envir = ns4b, inherits = FALSE)
+))
+
+check("remove-fn: add still works", quote(
+  get("add", envir = ns4b)(1, 2) == 3
+))
+
+check("remove-fn: scale_vector still works", quote(
+  identical(get("scale_vector", envir = ns4b)(1:3, factor = 2), c(2, 4, 6))
+))
+
+check("remove-fn: R6 classes unaffected", quote(
+  exists("Logger", envir = ns4b, inherits = FALSE) &&
+    exists("Counter", envir = ns4b, inherits = FALSE)
+))
+
+ns4b_full <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("remove-fn: full=TRUE clears summarize_values from ns", quote(
+  !exists("summarize_values", envir = ns4b_full, inherits = FALSE)
+))
+
+check("remove-fn: full=TRUE clears summarize_values from pkg env", quote(
+  !exists("summarize_values", where = pkg_env4, inherits = FALSE)
+))
+
+# --- 4c: Add a new function to base.R ---
+cat("\n--- 4c: add multiply() to base.R ---\n\n")
+
+writeLines(c(
+  "add <- function(a, b) {",
+  "  a + b",
+  "}",
+  "",
+  "scale_vector <- function(x, factor = 1) {",
+  "  x * factor",
+  "}",
+  "",
+  "multiply <- function(a, b) {",
+  "  a * b",
+  "}"
+), file.path(tmp_c, "R", "base.R"))
+
+reload4c <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+ns4c <- reload4c$value
+
+check("add-fn: multiply exists in namespace", quote(
+  exists("multiply", envir = ns4c, inherits = FALSE)
+))
+
+check("add-fn: multiply(3,4) returns 12", quote(
+  get("multiply", envir = ns4c)(3, 4) == 12
+))
+
+check("add-fn: multiply visible from pkg env", quote(
+  exists("multiply", where = pkg_env4, inherits = FALSE)
+))
+
+check("add-fn: add still works", quote(
+  get("add", envir = ns4c)(5, 6) == 11
+))
+
+# --- 4d: Modify a function (change behavior, same name) ---
+cat("\n--- 4d: modify add() behavior ---\n\n")
+
+writeLines(c(
+  "add <- function(a, b) {",
+  "  a + b + 1000",
+  "}",
+  "",
+  "scale_vector <- function(x, factor = 1) {",
+  "  x * factor",
+  "}",
+  "",
+  "multiply <- function(a, b) {",
+  "  a * b",
+  "}"
+), file.path(tmp_c, "R", "base.R"))
+
+reload4d <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+ns4d <- reload4d$value
+
+check("modify-fn: add(1,2) now returns 1003", quote(
+  get("add", envir = ns4d)(1, 2) == 1003
+))
+
+check("modify-fn: add updated in pkg env too", quote(
+  get("add", pos = pkg_env4)(1, 2) == 1003
+))
+
+check("modify-fn: multiply still works", quote(
+  get("multiply", envir = ns4d)(3, 4) == 12
+))
+
+# --- 4e: Add a new R file ---
+cat("\n--- 4e: add new file extras.R ---\n\n")
+
+writeLines(c(
+  "negate <- function(x) -x",
+  "",
+  "double <- function(x) x * 2"
+), file.path(tmp_c, "R", "extras.R"))
+
+reload4e <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+ns4e <- reload4e$value
+
+check("new-file: negate exists", quote(
+  exists("negate", envir = ns4e, inherits = FALSE)
+))
+
+check("new-file: negate(5) returns -5", quote(
+  get("negate", envir = ns4e)(5) == -5
+))
+
+check("new-file: double exists in pkg env", quote(
+  exists("double", where = pkg_env4, inherits = FALSE)
+))
+
+check("new-file: double(7) returns 14", quote(
+  get("double", pos = pkg_env4)(7) == 14
+))
+
+check("new-file: existing functions unaffected", quote(
+  get("add", envir = ns4e)(1, 2) == 1003
+))
+
+# --- 4f: Delete an R file entirely ---
+cat("\n--- 4f: delete extras.R ---\n\n")
+
+invisible(file.remove(file.path(tmp_c, "R", "extras.R")))
+
+ns4f <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("del-file: negate lingers (no stale cleanup)", quote(
+  exists("negate", envir = ns4f, inherits = FALSE)
+))
+
+check("del-file: add still works", quote(
+  get("add", envir = ns4f)(1, 2) == 1003
+))
+
+check("del-file: R6 classes still work", quote({
+  ctr <- get("Counter", envir = ns4f)$new()
+  ctr$increment(by = 3L)
+  ctr$value == 3L
+}))
+
+ns4f_full <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("del-file: full=TRUE clears negate from ns", quote(
+  !exists("negate", envir = ns4f_full, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears double from ns", quote(
+  !exists("double", envir = ns4f_full, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears negate from pkg env", quote(
+  !exists("negate", where = pkg_env4, inherits = FALSE)
+))
+
+check("del-file: full=TRUE clears double from pkg env", quote(
+  !exists("double", where = pkg_env4, inherits = FALSE)
+))
+
+check("del-file: full=TRUE add still works", quote(
+  get("add", envir = ns4f_full)(1, 2) == 1003
+))
+
+check("remove-fn: message lists changed file", quote(
+  any(grepl("base\\.R", reload4b$messages))
+))
+
+check("add-fn: message lists changed file", quote(
+  any(grepl("base\\.R", reload4c$messages))
+))
+
+check("modify-fn: message lists changed file", quote(
+  any(grepl("base\\.R", reload4d$messages))
+))
+
+check("new-file: message lists added file", quote(
+  any(grepl("extras\\.R", reload4e$messages))
+))
+
+# --- 4g: Incremental message truncates after ten files ---
+cat("\n--- 4g: incremental message truncation ---\n\n")
+
+many_files <- sprintf("bulk_%02d.R", 1:12)
+for (f in many_files) {
+  writeLines(
+    c(
+      sprintf("fn_%s <- function() %d", sub("\\.R$", "", f), match(f, many_files))
+    ),
+    file.path(tmp_c, "R", f)
   )
-  ns4b <- reload4b$value
-
-  check("remove-fn: summarize_values lingers (no stale cleanup)", quote(
-    exists("summarize_values", envir = ns4b, inherits = FALSE)
-  ))
-
-  check("remove-fn: add still works", quote(
-    get("add", envir = ns4b)(1, 2) == 3
-  ))
-
-  check("remove-fn: scale_vector still works", quote(
-    identical(get("scale_vector", envir = ns4b)(1:3, factor = 2), c(2, 4, 6))
-  ))
-
-  check("remove-fn: R6 classes unaffected", quote(
-    exists("Logger", envir = ns4b, inherits = FALSE) &&
-      exists("Counter", envir = ns4b, inherits = FALSE)
-  ))
-
-  ns4b_full <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
-
-  check("remove-fn: full=TRUE clears summarize_values from ns", quote(
-    !exists("summarize_values", envir = ns4b_full, inherits = FALSE)
-  ))
-
-  check("remove-fn: full=TRUE clears summarize_values from pkg env", quote(
-    !exists("summarize_values", where = pkg_env4, inherits = FALSE)
-  ))
-
-  # --- 4c: Add a new function to base.R ---
-  cat("\n--- 4c: add multiply() to base.R ---\n\n")
-
-  writeLines(c(
-    "add <- function(a, b) {",
-    "  a + b",
-    "}",
-    "",
-    "scale_vector <- function(x, factor = 1) {",
-    "  x * factor",
-    "}",
-    "",
-    "multiply <- function(a, b) {",
-    "  a * b",
-    "}"
-  ), file.path(tmp_c, "R", "base.R"))
-
-  reload4c <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-  ns4c <- reload4c$value
-
-  check("add-fn: multiply exists in namespace", quote(
-    exists("multiply", envir = ns4c, inherits = FALSE)
-  ))
-
-  check("add-fn: multiply(3,4) returns 12", quote(
-    get("multiply", envir = ns4c)(3, 4) == 12
-  ))
-
-  check("add-fn: multiply visible from pkg env", quote(
-    exists("multiply", where = pkg_env4, inherits = FALSE)
-  ))
-
-  check("add-fn: add still works", quote(
-    get("add", envir = ns4c)(5, 6) == 11
-  ))
-
-  # --- 4d: Modify a function (change behavior, same name) ---
-  cat("\n--- 4d: modify add() behavior ---\n\n")
-
-  writeLines(c(
-    "add <- function(a, b) {",
-    "  a + b + 1000",
-    "}",
-    "",
-    "scale_vector <- function(x, factor = 1) {",
-    "  x * factor",
-    "}",
-    "",
-    "multiply <- function(a, b) {",
-    "  a * b",
-    "}"
-  ), file.path(tmp_c, "R", "base.R"))
-
-  reload4d <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-  ns4d <- reload4d$value
-
-  check("modify-fn: add(1,2) now returns 1003", quote(
-    get("add", envir = ns4d)(1, 2) == 1003
-  ))
-
-  check("modify-fn: add updated in pkg env too", quote(
-    get("add", pos = pkg_env4)(1, 2) == 1003
-  ))
-
-  check("modify-fn: multiply still works", quote(
-    get("multiply", envir = ns4d)(3, 4) == 12
-  ))
-
-  # --- 4e: Add a new R file ---
-  cat("\n--- 4e: add new file extras.R ---\n\n")
-
-  writeLines(c(
-    "negate <- function(x) -x",
-    "",
-    "double <- function(x) x * 2"
-  ), file.path(tmp_c, "R", "extras.R"))
-
-  reload4e <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-  ns4e <- reload4e$value
-
-  check("new-file: negate exists", quote(
-    exists("negate", envir = ns4e, inherits = FALSE)
-  ))
-
-  check("new-file: negate(5) returns -5", quote(
-    get("negate", envir = ns4e)(5) == -5
-  ))
-
-  check("new-file: double exists in pkg env", quote(
-    exists("double", where = pkg_env4, inherits = FALSE)
-  ))
-
-  check("new-file: double(7) returns 14", quote(
-    get("double", pos = pkg_env4)(7) == 14
-  ))
-
-  check("new-file: existing functions unaffected", quote(
-    get("add", envir = ns4e)(1, 2) == 1003
-  ))
-
-  # --- 4f: Delete an R file entirely ---
-  cat("\n--- 4f: delete extras.R ---\n\n")
-
-  invisible(file.remove(file.path(tmp_c, "R", "extras.R")))
-
-  ns4f <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-
-  check("del-file: negate lingers (no stale cleanup)", quote(
-    exists("negate", envir = ns4f, inherits = FALSE)
-  ))
-
-  check("del-file: add still works", quote(
-    get("add", envir = ns4f)(1, 2) == 1003
-  ))
-
-  check("del-file: R6 classes still work", quote({
-    ctr <- get("Counter", envir = ns4f)$new()
-    ctr$increment(by = 3L)
-    ctr$value == 3L
-  }))
-
-  ns4f_full <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
-
-  check("del-file: full=TRUE clears negate from ns", quote(
-    !exists("negate", envir = ns4f_full, inherits = FALSE)
-  ))
-
-  check("del-file: full=TRUE clears double from ns", quote(
-    !exists("double", envir = ns4f_full, inherits = FALSE)
-  ))
-
-  check("del-file: full=TRUE clears negate from pkg env", quote(
-    !exists("negate", where = pkg_env4, inherits = FALSE)
-  ))
-
-  check("del-file: full=TRUE clears double from pkg env", quote(
-    !exists("double", where = pkg_env4, inherits = FALSE)
-  ))
-
-  check("del-file: full=TRUE add still works", quote(
-    get("add", envir = ns4f_full)(1, 2) == 1003
-  ))
-
-  check("remove-fn: message lists changed file", quote(
-    any(grepl("base\\.R", reload4b$messages))
-  ))
-
-  check("add-fn: message lists changed file", quote(
-    any(grepl("base\\.R", reload4c$messages))
-  ))
-
-  check("modify-fn: message lists changed file", quote(
-    any(grepl("base\\.R", reload4d$messages))
-  ))
-
-  check("new-file: message lists added file", quote(
-    any(grepl("extras\\.R", reload4e$messages))
-  ))
-
-  # --- 4g: Incremental message truncates after ten files ---
-  cat("\n--- 4g: incremental message truncation ---\n\n")
-
-  many_files <- sprintf("bulk_%02d.R", 1:12)
-  for (f in many_files) {
-    writeLines(
-      c(
-        sprintf("fn_%s <- function() %d", sub("\\.R$", "", f), match(f, many_files))
-      ),
-      file.path(tmp_c, "R", f)
-    )
-  }
-
-  reload4g <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-
-  check("many-files: reload returns namespace", quote(
-    is.environment(reload4g$value) && isNamespace(reload4g$value)
-  ))
-
-  check("many-files: message lists up to five bulk files", quote(
-    sum(vapply(
-      many_files[1:5],
-      function(f) any(grepl(f, reload4g$messages, fixed = TRUE)),
-      logical(1)
-    )) == 5L
-  ))
-
-  check("many-files: message truncates remaining files", quote(
-    any(grepl("and 7 more file\\(s\\)", reload4g$messages))
-  ))
-
-  check("many-files: sixth and later files are not listed explicitly", quote(
-    !any(grepl("bulk_06\\.R|bulk_07\\.R|bulk_08\\.R|bulk_09\\.R|bulk_10\\.R|bulk_11\\.R|bulk_12\\.R", reload4g$messages))
-  ))
-
-  # --- 4h: failed incremental reload must not advance cache ---
-  cat("\n--- 4h: failed incremental reload preserves prior state ---\n\n")
-
-  writeLines(c(
-    "add <- function(a, b) {",
-    "  a + b + 1000",
-    "}",
-    "",
-    "BROKEN_PARSE <- (",
-    "",
-    "scale_vector <- function(x, factor = 1) {",
-    "  x * factor",
-    "}",
-    "",
-    "multiply <- function(a, b) {",
-    "  a * b",
-    "}"
-  ), file.path(tmp_c, "R", "base.R"))
-
-  failed_reload4h <- tryCatch(
-    list(value = load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE), error = NULL),
-    error = function(e) list(value = NULL, error = e)
-  )
-
-  check("failed-reload: incremental reload errors on broken source file", quote(
-    inherits(failed_reload4h$error, "error")
-  ))
-
-  check("failed-reload: existing namespace state is preserved after failed reload", quote(
-    get("add", envir = ns4f_full)(1, 2) == 1003
-  ))
-
-  check("failed-reload: attached pkg env still has prior add() after failed reload", quote(
-    get("add", pos = pkg_env4)(1, 2) == 1003
-  ))
-
-  check("failed-reload: error reports the broken source file", quote(
-    grepl("base\\.R", conditionMessage(failed_reload4h$error)) ||
-      grepl("unexpected", conditionMessage(failed_reload4h$error), fixed = TRUE)
-  ))
-
-  writeLines(c(
-    "add <- function(a, b) {",
-    "  a + b + 2000",
-    "}",
-    "",
-    "scale_vector <- function(x, factor = 1) {",
-    "  x * factor",
-    "}",
-    "",
-    "multiply <- function(a, b) {",
-    "  a * b",
-    "}"
-  ), file.path(tmp_c, "R", "base.R"))
-
-  recovered_reload4h <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-
-  check("failed-reload: fixed file is retried on next incremental load", quote(
-    get("add", envir = recovered_reload4h$value)(1, 2) == 2003
-  ))
-
-  check("failed-reload: pkg env updates after successful retry", quote(
-    get("add", pos = pkg_env4)(1, 2) == 2003
-  ))
-
-  # --- 4i: runtime patch invalidation triggers single-file reload ---
-  cat("\n--- 4i: runtime patch invalidation triggers single-file reload ---\n\n")
-
-  writeLines(c(
-    "runtime_target <- function() {",
-    "  \"original\"",
-    "}",
-    "",
-    "activate_runtime_patch <- function() {",
-    "  assign(",
-    "    \"runtime_target\",",
-    "    function() \"patched\",",
-    "    envir = environment(runtime_target)",
-    "  )",
-    "  load_fast_invalidate(",
-    "    path = ", dQuote(gsub("\\\\", "/", tmp_c)), ",",
-    "    files = \"runtime_patch.R\",",
-    "    reason = \"runtime patch test\"",
-    "  )",
-    "  invisible(NULL)",
-    "}"
-  ), file.path(tmp_c, "R", "runtime_patch.R"))
-
-  runtime_patch_load <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-
-  check("invalidate-file: runtime patch helper file loads", quote(
-    exists("runtime_target", envir = runtime_patch_load$value, inherits = FALSE) &&
-      exists("activate_runtime_patch", envir = runtime_patch_load$value, inherits = FALSE)
-  ))
-
-  check("invalidate-file: runtime_target initially returns original", quote(
-    get("runtime_target", envir = runtime_patch_load$value)() == "original"
-  ))
-
-  get("activate_runtime_patch", envir = runtime_patch_load$value)()
-
-  check("invalidate-file: runtime patch changes live namespace state", quote(
-    get("runtime_target", envir = runtime_patch_load$value)() == "patched"
-  ))
-
-  invalidated_reload4i <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-
-  check("invalidate-file: invalidated file is re-sourced on next load", quote(
-    get("runtime_target", envir = invalidated_reload4i$value)() == "original"
-  ))
-
-  check("invalidate-file: pkg env also reflects restored function", quote(
-    get("runtime_target", pos = pkg_env4)() == "original"
-  ))
-
-  check("invalidate-file: next load reports invalidation reason", quote(
-    any(grepl("runtime patch test", invalidated_reload4i$messages, fixed = TRUE))
-  ))
-
-  check("invalidate-file: next load reports invalidated file", quote(
-    any(grepl("runtime_patch\\.R", invalidated_reload4i$messages))
-  ))
-
-  # --- 4j: runtime S4 patch invalidation triggers single-file reload ---
-  cat("\n--- 4j: runtime S4 patch invalidation triggers single-file reload ---\n\n")
-
-  writeLines(c(
-    "setGeneric(",
-    "  \"runtime_describe_animal\",",
-    "  function(x) standardGeneric(\"runtime_describe_animal\")",
-    ")",
-    "",
-    "setMethod(",
-    "  \"runtime_describe_animal\",",
-    "  \"Animal\",",
-    "  function(x) {",
-    "    paste0(\"original:\", x@name)",
-    "  }",
-    ")",
-    "",
-    "activate_runtime_s4_patch <- function() {",
-    "  setMethod(",
-    "    \"runtime_describe_animal\",",
-    "    \"Animal\",",
-    "    function(x) {",
-    "      paste0(\"patched:\", x@name)",
-    "    }",
-    "  )",
-    "  load_fast_invalidate(",
-    "    path = ", dQuote(gsub("\\\\", "/", tmp_c)), ",",
-    "    files = \"runtime_patch_s4.R\",",
-    "    reason = \"runtime S4 patch test\"",
-    "  )",
-    "  invisible(NULL)",
-    "}"
-  ), file.path(tmp_c, "R", "runtime_patch_s4.R"))
-
-  runtime_patch_s4_load <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-
-  a_runtime_s4 <- get("animal", envir = runtime_patch_s4_load$value)("Milo", "cat", 4)
-
-  check("invalidate-s4: runtime S4 helper file loads", quote(
-    exists("runtime_describe_animal", envir = runtime_patch_s4_load$value, inherits = FALSE) &&
-      exists("activate_runtime_s4_patch", envir = runtime_patch_s4_load$value, inherits = FALSE)
-  ))
-
-  check("invalidate-s4: S4 method initially returns original behavior", quote(
-    get("runtime_describe_animal", envir = runtime_patch_s4_load$value)(a_runtime_s4) == "original:Milo"
-  ))
-
-  get("activate_runtime_s4_patch", envir = runtime_patch_s4_load$value)()
-
-  check("invalidate-s4: runtime S4 patch changes live method behavior", quote(
-    get("runtime_describe_animal", envir = runtime_patch_s4_load$value)(a_runtime_s4) == "patched:Milo"
-  ))
-
-  invalidated_reload4j <- capture_messages(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-
-  check("invalidate-s4: invalidated S4 file is re-sourced on next load", quote(
-    get("runtime_describe_animal", envir = invalidated_reload4j$value)(a_runtime_s4) == "original:Milo"
-  ))
-
-  check("invalidate-s4: pkg env also reflects restored S4 method", quote(
-    get("runtime_describe_animal", pos = pkg_env4)(a_runtime_s4) == "original:Milo"
-  ))
-
-  check("invalidate-s4: next load reports S4 invalidation reason", quote(
-    any(grepl("runtime S4 patch test", invalidated_reload4j$messages, fixed = TRUE))
-  ))
-
-  check("invalidate-s4: next load reports invalidated S4 file", quote(
-    any(grepl("runtime_patch_s4\\.R", invalidated_reload4j$messages))
-  ))
-
-  # --- 4k: Change renv.lock and keep warning until baseline is reset ---
-  cat("\n--- 4k: persistent renv.lock change warning ---\n\n")
-
-  old_lock <- readLines(file.path(tmp_c, "renv.lock"), warn = FALSE)
-  writeLines(c(old_lock, "", " "), file.path(tmp_c, "renv.lock"))
-
-  lock_reload <- capture_conditions(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-
-  check("lockfile: reload still returns namespace", quote(
-    is.environment(lock_reload$value) && isNamespace(lock_reload$value)
-  ))
-
-  check("lockfile: warns when renv.lock changed", quote(
-    any(grepl("renv.lock changed", lock_reload$warnings))
-  ))
-
-  lock_reload_again <- capture_conditions(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
-  )
-
-  check("lockfile: warning persists on later reloads", quote(
-    any(grepl("renv.lock changed", lock_reload_again$warnings))
-  ))
-
-  lock_reload_full <- capture_conditions(
-    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
-  )
-
-  check("lockfile: full reload resets warning baseline", quote(
-    !any(grepl("renv.lock changed", lock_reload_full$warnings))
-  ))
-} # end if (is_incr)
+}
+
+reload4g <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("many-files: reload returns namespace", quote(
+  is.environment(reload4g$value) && isNamespace(reload4g$value)
+))
+
+check("many-files: message lists up to five bulk files", quote(
+  sum(vapply(
+    many_files[1:5],
+    function(f) any(grepl(f, reload4g$messages, fixed = TRUE)),
+    logical(1)
+  )) == 5L
+))
+
+check("many-files: message truncates remaining files", quote(
+  any(grepl("and 7 more file\\(s\\)", reload4g$messages))
+))
+
+check("many-files: sixth and later files are not listed explicitly", quote(
+  !any(grepl("bulk_06\\.R|bulk_07\\.R|bulk_08\\.R|bulk_09\\.R|bulk_10\\.R|bulk_11\\.R|bulk_12\\.R", reload4g$messages))
+))
+
+# --- 4h: failed incremental reload must not advance cache ---
+cat("\n--- 4h: failed incremental reload preserves prior state ---\n\n")
+
+writeLines(c(
+  "add <- function(a, b) {",
+  "  a + b + 1000",
+  "}",
+  "",
+  "BROKEN_PARSE <- (",
+  "",
+  "scale_vector <- function(x, factor = 1) {",
+  "  x * factor",
+  "}",
+  "",
+  "multiply <- function(a, b) {",
+  "  a * b",
+  "}"
+), file.path(tmp_c, "R", "base.R"))
+
+failed_reload4h <- tryCatch(
+  list(value = load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE), error = NULL),
+  error = function(e) list(value = NULL, error = e)
+)
+
+check("failed-reload: incremental reload errors on broken source file", quote(
+  inherits(failed_reload4h$error, "error")
+))
+
+check("failed-reload: existing namespace state is preserved after failed reload", quote(
+  get("add", envir = ns4f_full)(1, 2) == 1003
+))
+
+check("failed-reload: attached pkg env still has prior add() after failed reload", quote(
+  get("add", pos = pkg_env4)(1, 2) == 1003
+))
+
+check("failed-reload: error reports the broken source file", quote(
+  grepl("base\\.R", conditionMessage(failed_reload4h$error)) ||
+    grepl("unexpected", conditionMessage(failed_reload4h$error), fixed = TRUE)
+))
+
+writeLines(c(
+  "add <- function(a, b) {",
+  "  a + b + 2000",
+  "}",
+  "",
+  "scale_vector <- function(x, factor = 1) {",
+  "  x * factor",
+  "}",
+  "",
+  "multiply <- function(a, b) {",
+  "  a * b",
+  "}"
+), file.path(tmp_c, "R", "base.R"))
+
+recovered_reload4h <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("failed-reload: fixed file is retried on next incremental load", quote(
+  get("add", envir = recovered_reload4h$value)(1, 2) == 2003
+))
+
+check("failed-reload: pkg env updates after successful retry", quote(
+  get("add", pos = pkg_env4)(1, 2) == 2003
+))
+
+# --- 4i: runtime patch invalidation triggers single-file reload ---
+cat("\n--- 4i: runtime patch invalidation triggers single-file reload ---\n\n")
+
+writeLines(c(
+  "runtime_target <- function() {",
+  "  \"original\"",
+  "}",
+  "",
+  "activate_runtime_patch <- function() {",
+  "  assign(",
+  "    \"runtime_target\",",
+  "    function() \"patched\",",
+  "    envir = environment(runtime_target)",
+  "  )",
+  "  load_fast_invalidate(",
+  "    path = ", dQuote(gsub("\\\\", "/", tmp_c)), ",",
+  "    files = \"runtime_patch.R\",",
+  "    reason = \"runtime patch test\"",
+  "  )",
+  "  invisible(NULL)",
+  "}"
+), file.path(tmp_c, "R", "runtime_patch.R"))
+
+runtime_patch_load <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("invalidate-file: runtime patch helper file loads", quote(
+  exists("runtime_target", envir = runtime_patch_load$value, inherits = FALSE) &&
+    exists("activate_runtime_patch", envir = runtime_patch_load$value, inherits = FALSE)
+))
+
+check("invalidate-file: runtime_target initially returns original", quote(
+  get("runtime_target", envir = runtime_patch_load$value)() == "original"
+))
+
+get("activate_runtime_patch", envir = runtime_patch_load$value)()
+
+check("invalidate-file: runtime patch changes live namespace state", quote(
+  get("runtime_target", envir = runtime_patch_load$value)() == "patched"
+))
+
+invalidated_reload4i <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("invalidate-file: invalidated file is re-sourced on next load", quote(
+  get("runtime_target", envir = invalidated_reload4i$value)() == "original"
+))
+
+check("invalidate-file: pkg env also reflects restored function", quote(
+  get("runtime_target", pos = pkg_env4)() == "original"
+))
+
+check("invalidate-file: next load reports invalidation reason", quote(
+  any(grepl("runtime patch test", invalidated_reload4i$messages, fixed = TRUE))
+))
+
+check("invalidate-file: next load reports invalidated file", quote(
+  any(grepl("runtime_patch\\.R", invalidated_reload4i$messages))
+))
+
+# --- 4j: runtime S4 patch invalidation triggers single-file reload ---
+cat("\n--- 4j: runtime S4 patch invalidation triggers single-file reload ---\n\n")
+
+writeLines(c(
+  "setGeneric(",
+  "  \"runtime_describe_animal\",",
+  "  function(x) standardGeneric(\"runtime_describe_animal\")",
+  ")",
+  "",
+  "setMethod(",
+  "  \"runtime_describe_animal\",",
+  "  \"Animal\",",
+  "  function(x) {",
+  "    paste0(\"original:\", x@name)",
+  "  }",
+  ")",
+  "",
+  "activate_runtime_s4_patch <- function() {",
+  "  setMethod(",
+  "    \"runtime_describe_animal\",",
+  "    \"Animal\",",
+  "    function(x) {",
+  "      paste0(\"patched:\", x@name)",
+  "    }",
+  "  )",
+  "  load_fast_invalidate(",
+  "    path = ", dQuote(gsub("\\\\", "/", tmp_c)), ",",
+  "    files = \"runtime_patch_s4.R\",",
+  "    reason = \"runtime S4 patch test\"",
+  "  )",
+  "  invisible(NULL)",
+  "}"
+), file.path(tmp_c, "R", "runtime_patch_s4.R"))
+
+runtime_patch_s4_load <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+a_runtime_s4 <- get("animal", envir = runtime_patch_s4_load$value)("Milo", "cat", 4)
+
+check("invalidate-s4: runtime S4 helper file loads", quote(
+  exists("runtime_describe_animal", envir = runtime_patch_s4_load$value, inherits = FALSE) &&
+    exists("activate_runtime_s4_patch", envir = runtime_patch_s4_load$value, inherits = FALSE)
+))
+
+check("invalidate-s4: S4 method initially returns original behavior", quote(
+  get("runtime_describe_animal", envir = runtime_patch_s4_load$value)(a_runtime_s4) == "original:Milo"
+))
+
+get("activate_runtime_s4_patch", envir = runtime_patch_s4_load$value)()
+
+check("invalidate-s4: runtime S4 patch changes live method behavior", quote(
+  get("runtime_describe_animal", envir = runtime_patch_s4_load$value)(a_runtime_s4) == "patched:Milo"
+))
+
+invalidated_reload4j <- capture_messages(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("invalidate-s4: invalidated S4 file is re-sourced on next load", quote(
+  get("runtime_describe_animal", envir = invalidated_reload4j$value)(a_runtime_s4) == "original:Milo"
+))
+
+check("invalidate-s4: pkg env also reflects restored S4 method", quote(
+  get("runtime_describe_animal", pos = pkg_env4)(a_runtime_s4) == "original:Milo"
+))
+
+check("invalidate-s4: next load reports S4 invalidation reason", quote(
+  any(grepl("runtime S4 patch test", invalidated_reload4j$messages, fixed = TRUE))
+))
+
+check("invalidate-s4: next load reports invalidated S4 file", quote(
+  any(grepl("runtime_patch_s4\\.R", invalidated_reload4j$messages))
+))
+
+# --- 4k: Change renv.lock and keep warning until baseline is reset ---
+cat("\n--- 4k: persistent renv.lock change warning ---\n\n")
+
+old_lock <- readLines(file.path(tmp_c, "renv.lock"), warn = FALSE)
+writeLines(c(old_lock, "", " "), file.path(tmp_c, "renv.lock"))
+
+lock_reload <- capture_conditions(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("lockfile: reload still returns namespace", quote(
+  is.environment(lock_reload$value) && isNamespace(lock_reload$value)
+))
+
+check("lockfile: warns when renv.lock changed", quote(
+  any(grepl("renv.lock changed", lock_reload$warnings))
+))
+
+lock_reload_again <- capture_conditions(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("lockfile: warning persists on later reloads", quote(
+  any(grepl("renv.lock changed", lock_reload_again$warnings))
+))
+
+lock_reload_full <- capture_conditions(
+  load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+)
+
+check("lockfile: full reload resets warning baseline", quote(
+  !any(grepl("renv.lock changed", lock_reload_full$warnings))
+))
 
 # ============================================================================
 # Summary

@@ -77,21 +77,6 @@ The full-load and incremental-load paths both bulk-copy namespace and imports in
 **Priority**
 - Low
 
-### 6. Top-level sourcing message is noisy
-**Why this matters**
-
-Sourcing `loadfast.R` emits a message immediately. That is workable in interactive use but slightly noisy for scripts and automated flows.
-
-**Risk**
-- Extra console noise
-- Less predictable output in scripted workflows
-
-**Preferred fix**
-- Consider removing the top-level attach message, or make it opt-in
-
-**Priority**
-- Low
-
 ## Conscious tradeoffs, not bugs
 
 These should not be "fixed" casually unless the project goals change.

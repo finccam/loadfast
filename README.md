@@ -31,19 +31,9 @@ if (identical(Sys.getenv("FINCCAM_LOADFAST_ENABLED"), "true")) {
 }
 ```
 
-## loadfast_v1
-
-`loadfast_v1.R` is the initial implementation without incremental reload support — it always does a full teardown+rebuild on every call. Superseded by `loadfast.R`.
-
-```r
-source("loadfast_v1.R")
-loadfast_v1("path/to/your/package")
-```
-
 ## Tests
 
 ```sh
 cd loadfast
 Rscript test_loadfast.R
-Rscript test_loadfast_v1.R
 ```
