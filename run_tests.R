@@ -26,10 +26,50 @@ check <- function(description, expr) {
 
 .tmp_dirs <- character(0)
 
+capture_warnings <- function(expr) {
+  warnings <- character(0)
+  value <- withCallingHandlers(
+    expr,
+    warning = function(w) {
+      warnings <<- c(warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+  list(value = value, warnings = warnings)
+}
+
+capture_messages <- function(expr) {
+  messages <- character(0)
+  value <- withCallingHandlers(
+    expr,
+    message = function(m) {
+      messages <<- c(messages, conditionMessage(m))
+    }
+  )
+  list(value = value, messages = messages)
+}
+
+capture_conditions <- function(expr) {
+  warnings <- character(0)
+  messages <- character(0)
+  value <- withCallingHandlers(
+    expr,
+    warning = function(w) {
+      warnings <<- c(warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    },
+    message = function(m) {
+      messages <<- c(messages, conditionMessage(m))
+    }
+  )
+  list(value = value, warnings = warnings, messages = messages)
+}
+
 copy_baseline <- function(dest) {
   dir.create(dest, recursive = TRUE, showWarnings = FALSE)
   invisible(file.copy(file.path("devpackage", "DESCRIPTION"), dest))
   invisible(file.copy(file.path("devpackage", "NAMESPACE"), dest))
+  invisible(file.copy(file.path("renv.lock"), dest))
   dir.create(file.path(dest, "R"), showWarnings = FALSE)
   for (f in list.files(file.path("devpackage", "R"), full.names = TRUE)) {
     invisible(file.copy(f, file.path(dest, "R", basename(f))))
@@ -947,7 +987,10 @@ if (is_incr) {
     "}"
   ), file.path(tmp_c, "R", "base.R"))
 
-  ns4b <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  reload4b <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+  ns4b <- reload4b$value
 
   check("remove-fn: summarize_values lingers (no stale cleanup)", quote(
     exists("summarize_values", envir = ns4b, inherits = FALSE)
@@ -993,7 +1036,10 @@ if (is_incr) {
     "}"
   ), file.path(tmp_c, "R", "base.R"))
 
-  ns4c <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  reload4c <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+  ns4c <- reload4c$value
 
   check("add-fn: multiply exists in namespace", quote(
     exists("multiply", envir = ns4c, inherits = FALSE)
@@ -1028,7 +1074,10 @@ if (is_incr) {
     "}"
   ), file.path(tmp_c, "R", "base.R"))
 
-  ns4d <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  reload4d <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+  ns4d <- reload4d$value
 
   check("modify-fn: add(1,2) now returns 1003", quote(
     get("add", envir = ns4d)(1, 2) == 1003
@@ -1051,7 +1100,10 @@ if (is_incr) {
     "double <- function(x) x * 2"
   ), file.path(tmp_c, "R", "extras.R"))
 
-  ns4e <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  reload4e <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+  ns4e <- reload4e$value
 
   check("new-file: negate exists", quote(
     exists("negate", envir = ns4e, inherits = FALSE)
@@ -1114,6 +1166,93 @@ if (is_incr) {
 
   check("del-file: full=TRUE add still works", quote(
     get("add", envir = ns4f_full)(1, 2) == 1003
+  ))
+
+  check("remove-fn: message lists changed file", quote(
+    any(grepl("base\\.R", reload4b$messages))
+  ))
+
+  check("add-fn: message lists changed file", quote(
+    any(grepl("base\\.R", reload4c$messages))
+  ))
+
+  check("modify-fn: message lists changed file", quote(
+    any(grepl("base\\.R", reload4d$messages))
+  ))
+
+  check("new-file: message lists added file", quote(
+    any(grepl("extras\\.R", reload4e$messages))
+  ))
+
+  # --- 4g: Incremental message truncates after ten files ---
+  cat("\n--- 4g: incremental message truncation ---\n\n")
+
+  many_files <- sprintf("bulk_%02d.R", 1:12)
+  for (f in many_files) {
+    writeLines(
+      c(
+        sprintf("fn_%s <- function() %d", sub("\\.R$", "", f), match(f, many_files))
+      ),
+      file.path(tmp_c, "R", f)
+    )
+  }
+
+  reload4g <- capture_messages(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  check("many-files: reload returns namespace", quote(
+    is.environment(reload4g$value) && isNamespace(reload4g$value)
+  ))
+
+  check("many-files: message lists up to five bulk files", quote(
+    sum(vapply(
+      many_files[1:5],
+      function(f) any(grepl(f, reload4g$messages, fixed = TRUE)),
+      logical(1)
+    )) == 5L
+  ))
+
+  check("many-files: message truncates remaining files", quote(
+    any(grepl("and 7 more file\\(s\\)", reload4g$messages))
+  ))
+
+  check("many-files: sixth and later files are not listed explicitly", quote(
+    !any(grepl("bulk_06\\.R|bulk_07\\.R|bulk_08\\.R|bulk_09\\.R|bulk_10\\.R|bulk_11\\.R|bulk_12\\.R", reload4g$messages))
+  ))
+
+  # --- 4h: Change renv.lock and keep warning until baseline is reset ---
+  cat("\n--- 4h: persistent renv.lock change warning ---\n\n")
+
+  old_lock <- readLines(file.path(tmp_c, "renv.lock"), warn = FALSE)
+  writeLines(c(old_lock, "", " "), file.path(tmp_c, "renv.lock"))
+
+  lock_reload <- capture_conditions(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  check("lockfile: reload still returns namespace", quote(
+    is.environment(lock_reload$value) && isNamespace(lock_reload$value)
+  ))
+
+  check("lockfile: warns when renv.lock changed", quote(
+    any(grepl("renv.lock changed", lock_reload$warnings))
+  ))
+
+  lock_reload_again <- capture_conditions(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
+  )
+
+  check("lockfile: warning persists on later reloads", quote(
+    any(grepl("renv.lock changed", lock_reload_again$warnings))
+  ))
+
+  lock_reload_full <- capture_conditions(
+    load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+  )
+
+  check("lockfile: full reload resets warning baseline", quote(
+    !any(grepl("renv.lock changed", lock_reload_full$warnings))
   ))
 } # end if (is_incr)
 

@@ -1,7 +1,9 @@
-# loadfast.R
 # Standalone replacement for devtools::load_all() with MD5-based incremental
 # reloading. On first call does a full teardown+rebuild; on subsequent calls
 # for the same path re-sources only files whose MD5 hash changed.
+# Source of truth lives at https://github.com/finccam-com/loadfast/
+# This file is intended to be copied into every repo that uses it.
+# Make changes in that upstream repo, then copy the updated file down.
 # Requires: rlang (for namespace registry access)
 # Usage: source("loadfast.R"); load_fast()
 
@@ -50,6 +52,10 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
   current_hashes <- tools::md5sum(r_files)
   names(current_hashes) <- r_files
+
+  lock_path <- file.path(abs_path, "renv.lock")
+  current_lock_hash <- if (file.exists(lock_path)) unname(tools::md5sum(lock_path)) else NA_character_
+
   .timer("desc + file discovery + md5")
 
   cached <- NULL
@@ -65,6 +71,14 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     ns_env <- cached$ns_env
     pkg_env <- as.environment(pkg_env_name)
     old_hashes <- cached$hashes
+    old_lock_hash <- if (is.null(cached$lock_hash)) NA_character_ else cached$lock_hash
+
+    if (!identical(current_lock_hash, old_lock_hash)) {
+      warning(
+        "renv.lock changed since the initial load_fast() call for this path; dependency changes may require restarting R or reinstalling packages.",
+        call. = FALSE
+      )
+    }
 
     old_files <- names(old_hashes)
     new_files <- names(current_hashes)
@@ -73,7 +87,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     changed_files <- common_files[current_hashes[common_files] != old_hashes[common_files]]
 
     files_to_source <- c(changed_files, added_files)
-    files_to_source <- files_to_source[order(basename(files_to_source))]
+    files_to_source <- files_to_source[order(basename(files_to_source), files_to_source)]
 
     if (length(files_to_source) == 0L) {
       message("No changes in ", r_dir)
@@ -95,14 +109,33 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
     .timer("incr pkg_env sync")
 
-    .loadfast_file_cache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
+    .loadfast_file_cache[[abs_path]] <- list(
+      ns_env = ns_env,
+      hashes = current_hashes,
+      lock_hash = old_lock_hash
+    )
 
     n_changed <- length(changed_files)
     n_added <- length(added_files)
     parts <- character()
     if (n_changed > 0L) parts <- c(parts, paste0(n_changed, " changed"))
     if (n_added > 0L) parts <- c(parts, paste0(n_added, " added"))
-    message("Incremental reload: ", paste(parts, collapse = ", "))
+
+    changed_display <- basename(files_to_source)
+    if (length(changed_display) > 5L) {
+      changed_display <- c(
+        changed_display[seq_len(5L)],
+        paste0("and ", length(files_to_source) - 5L, " more file(s)")
+      )
+    }
+
+    message(
+      "Incremental reload: ",
+      paste(parts, collapse = ", "),
+      " [",
+      paste(changed_display, collapse = ", "),
+      "]"
+    )
 
     .source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
     .timer("TOTAL (incremental)")
@@ -278,7 +311,11 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   }
   .timer("source testthat helpers")
 
-  .loadfast_file_cache[[abs_path]] <- list(ns_env = ns_env, hashes = current_hashes)
+  .loadfast_file_cache[[abs_path]] <- list(
+    ns_env = ns_env,
+    hashes = current_hashes,
+    lock_hash = current_lock_hash
+  )
 
   message("Load ", length(r_files), " file(s) from ", r_dir)
   .timer("TOTAL (full load)")
@@ -331,7 +368,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   if (!dir.exists(test_dir)) {
     test_dir <- file.path(abs_path, "inst", "tests")
   }
-  
+
   if (dir.exists(test_dir)) {
     old_not_cran <- Sys.getenv("NOT_CRAN", unset = NA)
     Sys.setenv(NOT_CRAN = "true")

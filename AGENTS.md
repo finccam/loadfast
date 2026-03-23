@@ -11,7 +11,8 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 
 ## Project layout
 
-- **`loadfast.R`** (top-level) is the standalone replacement for `devtools::load_all()` with MD5-based incremental reloading. On first call does a full teardown+rebuild; on subsequent calls for the same path re-sources only files whose MD5 hash changed. See "Incremental loader" section below.
+- This repo **is** the source-of-truth edit target for `loadfast`. If you are changing loader behavior, docs, or tests for `loadfast`, make the change here. Downstream repos should copy-paste `loadfast.R` from this repo rather than maintain divergent local edits.
+- **`loadfast.R`** (top-level) is the standalone replacement for `devtools::load_all()` with MD5-based incremental reloading. On first call does a full teardown+rebuild; on subsequent calls for the same path re-sources only files whose MD5 hash changed. The canonical upstream source lives at `https://github.com/finccam-com/loadfast/`. This file is intended to be copy-pasted into every repo that uses it. See "Incremental loader" section below.
 - **`loadfast_v1.R`** (top-level) is the initial implementation without incremental reload support. Always does a full teardown+rebuild on every call. Superseded by `loadfast.R`. The function is named `loadfast_v1()`.
 - **`run_tests.R`** — unified test suite containing all stages. Expects `load_fast()` to already be defined and `.loader_name` to be set by the wrapper script. Stage 4 (incremental-specific) runs only when `.loader_name == "loadfast"`.
 - **`test_loadfast.R`** — thin wrapper: sources `loadfast.R`, sets `.loader_name <- "loadfast"`, sources `run_tests.R`.
