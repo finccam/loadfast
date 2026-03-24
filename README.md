@@ -60,6 +60,16 @@ After an incremental reload:
 
 Use `full = TRUE` after deleting files, removing functions, or whenever you need a clean namespace state.
 
+## Known bug: `lazydata` can fail across multiple loaded packages
+
+There is a known compatibility bug when multiple packages are loaded in the same R session with `loadfast` and one package calls code from another package.
+
+In particular, when package `A` is loaded and package `B` is then loaded, calling a function from `B` that depends on `A` can fail with:
+
+```r
+Error in function_in_a() : object 'lazydata' not found
+```
+
 ## Editor setup
 
 ### RStudio
