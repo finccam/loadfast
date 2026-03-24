@@ -1402,9 +1402,7 @@ writeLines(c(
   "    envir = environment(runtime_target)",
   "  )",
   "  load_fast_register_reload(",
-  "    path = ",
-  dQuote(gsub("\\\\", "/", tmp_c)),
-  ",",
+  paste0("    path = \"", gsub("\\\\", "/", tmp_c), "\","),
   "    files = \"runtime_patch.R\",",
   "    reason = \"runtime patch test\"",
   "  )",
@@ -1481,9 +1479,7 @@ writeLines(c(
   "    }",
   "  )",
   "  load_fast_register_reload(",
-  "    path = ",
-  dQuote(gsub("\\\\", "/", tmp_c)),
-  ",",
+  paste0("    path = \"", gsub("\\\\", "/", tmp_c), "\","),
   "    files = \"runtime_patch_s4.R\",",
   "    reason = \"runtime S4 patch test\"",
   "  )",
@@ -1539,8 +1535,12 @@ check("reload-s4: next load reports registered S4 file", quote(
 # --- 4k: Change renv.lock and keep warning until baseline is reset ---
 cat("\n--- 4k: persistent renv.lock change warning ---\n\n")
 
-old_lock <- readLines(file.path(tmp_c, "renv.lock"), warn = FALSE)
-writeLines(c(old_lock, "", " "), file.path(tmp_c, "renv.lock"))
+lock_path <- file.path(tmp_c, "renv.lock")
+if (!file.exists(lock_path)) {
+  writeLines("{}", lock_path)
+}
+old_lock <- readLines(lock_path, warn = FALSE)
+writeLines(c(old_lock, "", " "), lock_path)
 
 lock_reload <- capture_conditions(
   load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE)
