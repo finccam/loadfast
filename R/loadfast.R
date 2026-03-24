@@ -1,8 +1,34 @@
 message("Incremental reload is available via load_fast().")
 
 .loadfast.cache <- new.env(parent = emptyenv())
+.loadfast.cache.by_pkg <- new.env(parent = emptyenv())
 .loadfast.state <- new.env(parent = emptyenv())
 .loadfast.state$loading <- FALSE
+
+.loadfast.source_many <- function(files, ns_env) {
+  old_tle <- getOption("topLevelEnvironment")
+  old_keep_source <- getOption("keep.source")
+  old_show_error_locations <- getOption("show.error.locations")
+  on.exit({
+    options(
+      topLevelEnvironment = old_tle,
+      keep.source = old_keep_source,
+      show.error.locations = old_show_error_locations
+    )
+  }, add = TRUE)
+
+  options(
+    topLevelEnvironment = ns_env,
+    keep.source = TRUE,
+    show.error.locations = TRUE
+  )
+
+  for (f in files) {
+    .loadfast.source_one_eval(f, ns_env)
+  }
+
+  invisible(NULL)
+}
 
 #' Load a package from source with MD5-based incremental reloading
 #'
@@ -116,16 +142,55 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     cached <- .loadfast.cache[[abs_path]]
   }
 
+  ns_file <- file.path(abs_path, "NAMESPACE")
+  nsInfo <- NULL
+  if (file.exists(ns_file)) {
+    nsInfo <- parseNamespaceFile(
+      basename(abs_path),
+      dirname(abs_path),
+      mustExist = FALSE
+    )
+  }
+
+  current_dependency_fingerprint <- .loadfast.dependency_fingerprint(nsInfo)
+
   active_ns_env <- if (pkg_name %in% loadedNamespaces()) {
     tryCatch(asNamespace(pkg_name), error = function(e) NULL)
   } else {
     NULL
   }
 
+  dependency_changed <- !is.null(cached) &&
+    !identical(
+      if (is.null(cached$dependency_fingerprint)) NULL else cached$dependency_fingerprint,
+      current_dependency_fingerprint
+    )
+
+
+
+  dependency_changed_imports <- if (isTRUE(dependency_changed) && !is.null(current_dependency_fingerprint)) {
+    changed <- names(current_dependency_fingerprint)[vapply(
+      names(current_dependency_fingerprint),
+      function(name) {
+        old_value <- if (!is.null(cached$dependency_fingerprint) && name %in% names(cached$dependency_fingerprint)) {
+          cached$dependency_fingerprint[[name]]
+        } else {
+          NA_character_
+        }
+        !identical(old_value, current_dependency_fingerprint[[name]])
+      },
+      logical(1)
+    )]
+    if (length(changed) == 0L) names(current_dependency_fingerprint) else changed
+  } else {
+    character(0)
+  }
+
   can_incremental <- !is.null(cached) &&
     !is.null(active_ns_env) &&
     identical(cached$ns_env, active_ns_env) &&
-    pkg_env_name %in% search()
+    pkg_env_name %in% search() &&
+    !isTRUE(dependency_changed)
 
   if (can_incremental) {
     ns_env <- cached$ns_env
@@ -156,6 +221,13 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     registered_added_reload_files <- setdiff(registered_reload_files_cmp, old_files_cmp)
     registered_added_reload_files <- new_files[new_files_cmp %in% intersect(new_files_cmp, registered_added_reload_files)]
 
+    dependency_refresh <- !is.null(nsInfo) && length(nsInfo$imports) > 0L
+    dependency_refresh_packages <- if (dependency_refresh) unique(vapply(
+      nsInfo$imports,
+      function(i) if (is.character(i)) i else i[[1L]],
+      character(1)
+    )) else character(0)
+
     files_to_source <- unique(c(changed_files, added_files, registered_existing_reload_files, registered_added_reload_files))
     files_to_source <- files_to_source[order(basename(files_to_source), files_to_source)]
 
@@ -163,31 +235,34 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       if (!is.null(pending_reload_message)) {
         message(pending_reload_message)
       }
+      .loadfast.refresh_namespace_metadata(ns_env, nsInfo)
+      .loadfast.register_s3_methods(ns_env, nsInfo)
+      .loadfast.sync_pkg_env(ns_env, pkg_env)
       .loadfast.cache[[abs_path]] <- list(
         ns_env = ns_env,
         pkg_name = pkg_name,
         hashes = current_hashes,
         lock_hash = old_lock_hash,
+        dependency_fingerprint = current_dependency_fingerprint,
         registered_reload_files = character(0),
         pending_reload_message = NULL
       )
+      .loadfast.cache.by_pkg[[pkg_name]] <- abs_path
+
       message("No changes in ", r_dir_display, ".")
       .loadfast.source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
       .timer("TOTAL (no-change)")
       return(invisible(ns_env))
     }
 
-    old_tle <- getOption("topLevelEnvironment")
-    on.exit(options(topLevelEnvironment = old_tle), add = TRUE)
-    options(topLevelEnvironment = ns_env)
+    .loadfast.refresh_namespace_metadata(ns_env, nsInfo)
 
-    for (f in files_to_source) {
-      .loadfast.source_one(f, ns_env)
-    }
+    .loadfast.source_many(files_to_source, ns_env)
     .timer(paste0("incr source ", length(files_to_source), " files"))
 
-    list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
-    list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
+    .loadfast.refresh_namespace_metadata(ns_env, nsInfo)
+    .loadfast.register_s3_methods(ns_env, nsInfo)
+    .loadfast.sync_pkg_env(ns_env, pkg_env)
     .timer("incr pkg_env sync")
 
     .loadfast.cache[[abs_path]] <- list(
@@ -195,9 +270,13 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       pkg_name = pkg_name,
       hashes = current_hashes,
       lock_hash = old_lock_hash,
+      dependency_fingerprint = current_dependency_fingerprint,
       registered_reload_files = character(0),
       pending_reload_message = NULL
     )
+
+    .loadfast.cache.by_pkg[[pkg_name]] <- abs_path
+
 
     n_changed <- length(changed_files)
     n_added <- length(added_files)
@@ -234,6 +313,45 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
   # ---- FULL LOAD ----
 
+  if (isTRUE(dependency_changed) && !isTRUE(full)) {
+    changed_imports <- names(current_dependency_fingerprint)[vapply(
+      names(current_dependency_fingerprint),
+      function(name) {
+        old_value <- if (!is.null(cached$dependency_fingerprint) && name %in% names(cached$dependency_fingerprint)) {
+          cached$dependency_fingerprint[[name]]
+        } else {
+          NA_character_
+        }
+        !identical(old_value, current_dependency_fingerprint[[name]])
+      },
+      logical(1)
+    )]
+    if (length(changed_imports) == 0L) {
+      changed_imports <- names(current_dependency_fingerprint)
+    }
+    changed_imports <- changed_imports[nzchar(changed_imports)]
+    if (length(changed_imports) > 5L) {
+      changed_imports <- c(
+        changed_imports[seq_len(5L)],
+        paste0("and ", length(changed_imports) - 5L, " more package(s)")
+      )
+    }
+    message(
+      "Dependency-triggered rebuild of ",
+      pkg_name,
+      " because imported package state changed [",
+      paste(changed_imports, collapse = ", "),
+      "]."
+    )
+    message(
+      "Reloading ",
+      pkg_name,
+      " files [",
+      paste(basename(r_files), collapse = ", "),
+      "]."
+    )
+  }
+
   if (pkg_env_name %in% search()) {
     detach(pkg_env_name, character.only = TRUE, unload = FALSE, force = TRUE)
   }
@@ -245,145 +363,21 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       }
     })
   }
+  if (exists(pkg_name, envir = .loadfast.cache.by_pkg, inherits = FALSE)) {
+    rm(list = pkg_name, envir = .loadfast.cache.by_pkg)
+  }
   .timer("detach + unload old ns")
 
-  impenv <- new.env(parent = .BaseNamespaceEnv, hash = TRUE)
-  attr(impenv, "name") <- paste0("imports:", pkg_name)
-
-  ns_env <- new.env(parent = impenv, hash = TRUE)
-  ns_env$.packageName <- pkg_name
-
-  info <- new.env(hash = TRUE, parent = baseenv())
-  ns_env[[".__NAMESPACE__."]] <- info
-  info[["spec"]] <- c(name = pkg_name, version = "0.0.0")
-  setNamespaceInfo(ns_env, "exports", new.env(hash = TRUE, parent = baseenv()))
-  setNamespaceInfo(ns_env, "imports", list(base = TRUE))
-  setNamespaceInfo(ns_env, "path", abs_path)
-  setNamespaceInfo(ns_env, "dynlibs", NULL)
-  setNamespaceInfo(ns_env, "S3methods", matrix(NA_character_, 0L, 4L))
-  ns_env[[".__S3MethodsTable__."]] <- new.env(hash = TRUE, parent = baseenv())
-
-  reg <- rlang::ns_registry_env()
-  reg[[pkg_name]] <- ns_env
-
-  if (isNamespaceLoaded("methods")) {
-    methods::setPackageName(pkg_name, ns_env)
-  }
+  ns_env <- .loadfast.create_ns_env(pkg_name, abs_path)
   .timer("create + register ns env")
 
-  ns_file <- file.path(abs_path, "NAMESPACE")
-  if (file.exists(ns_file)) {
-    nsInfo <- parseNamespaceFile(
-      basename(abs_path),
-      dirname(abs_path),
-      mustExist = FALSE
-    )
+  if (!is.null(nsInfo)) {
     .timer("parseNamespaceFile")
-
-    for (i in nsInfo$imports) {
-      imp_label <- if (is.character(i)) i else i[[1L]]
-      tryCatch(
-        {
-          if (is.character(i)) {
-            namespaceImport(ns_env, loadNamespace(i), from = pkg_name)
-          } else if (!is.null(i$except)) {
-            namespaceImport(
-              ns_env,
-              loadNamespace(i[[1L]]),
-              from = pkg_name,
-              except = i$except
-            )
-          } else {
-            namespaceImportFrom(
-              ns_env,
-              loadNamespace(i[[1L]]),
-              i[[2L]],
-              from = pkg_name
-            )
-          }
-        },
-        error = function(e) {
-          stop(
-            "Import failed for ",
-            deparse(i),
-            ": ",
-            conditionMessage(e),
-            call. = FALSE
-          )
-        }
-      )
-      .timer(paste0("  import: ", imp_label))
-    }
-
-    for (imp in nsInfo$importClasses) {
-      tryCatch(
-        namespaceImportClasses(
-          ns_env,
-          loadNamespace(imp[[1L]]),
-          imp[[2L]],
-          from = pkg_name
-        ),
-        error = function(e) {
-          stop(
-            "importClassesFrom failed for ",
-            imp[[1L]],
-            ": ",
-            conditionMessage(e),
-            call. = FALSE
-          )
-        }
-      )
-      .timer(paste0("  importClasses: ", imp[[1L]], " [", paste(imp[[2L]], collapse = ","), "]"))
-    }
-    for (imp in nsInfo$importMethods) {
-      tryCatch(
-        namespaceImportMethods(
-          ns_env,
-          loadNamespace(imp[[1L]]),
-          imp[[2L]],
-          from = pkg_name
-        ),
-        error = function(e) {
-          stop(
-            "importMethodsFrom failed for ",
-            imp[[1L]],
-            ": ",
-            conditionMessage(e),
-            call. = FALSE
-          )
-        }
-      )
-      .timer(paste0("  importMethods: ", imp[[1L]], " [", paste(imp[[2L]], collapse = ","), "]"))
-    }
-    imports_canonical <- list(base = TRUE)
-    for (i in nsInfo$imports) {
-      if (is.character(i)) {
-        imports_canonical[[i]] <- TRUE
-      } else {
-        pkg <- i[[1L]]
-        syms <- i[[2L]]
-        if (isTRUE(imports_canonical[[pkg]])) next
-        imports_canonical[[pkg]] <- c(imports_canonical[[pkg]], syms)
-      }
-    }
-    setNamespaceInfo(ns_env, "imports", imports_canonical)
+    .loadfast.process_imports(ns_env, nsInfo)
   }
 
-  old_tle <- getOption("topLevelEnvironment")
-  on.exit(options(topLevelEnvironment = old_tle), add = TRUE)
-  options(topLevelEnvironment = ns_env)
-
-  for (f in r_files) {
-    .loadfast.source_one(f, ns_env)
-  }
+  .loadfast.full_load_code(r_files, ns_env, nsInfo)
   .timer(paste0("source ", length(r_files), " files"))
-
-  if (file.exists(ns_file)) {
-    exports <- nsInfo$exports
-    if (length(exports) > 0L) {
-      namespaceExport(ns_env, exports)
-    }
-  }
 
   uses_testthat <- local({
     test_dirs <- c(
@@ -399,8 +393,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   .timer("attach testthat")
 
   pkg_env <- attach(NULL, name = pkg_env_name)
-  list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
-  list2env(as.list(impenv, all.names = TRUE), envir = pkg_env)
+  .loadfast.sync_pkg_env(ns_env, pkg_env)
   .timer("attach pkg to search path")
 
   if (isTRUE(helpers) && uses_testthat) {
@@ -413,9 +406,13 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     pkg_name = pkg_name,
     hashes = current_hashes,
     lock_hash = current_lock_hash,
+    dependency_fingerprint = current_dependency_fingerprint,
     registered_reload_files = character(0),
     pending_reload_message = NULL
   )
+
+  .loadfast.cache.by_pkg[[pkg_name]] <- abs_path
+
 
   message("Load ", length(r_files), " file(s) from ", r_dir_display, ".")
   .timer("TOTAL (full load)")
@@ -496,40 +493,233 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
   invisible(TRUE)
 }
 
+.loadfast.create_ns_env <- function(pkg_name, abs_path) {
+  impenv <- new.env(parent = .BaseNamespaceEnv, hash = TRUE)
+  attr(impenv, "name") <- paste0("imports:", pkg_name)
+
+  ns_env <- new.env(parent = impenv, hash = TRUE)
+  ns_env$.packageName <- pkg_name
+
+  info <- new.env(hash = TRUE, parent = baseenv())
+  ns_env[[".__NAMESPACE__."]] <- info
+  info[["spec"]] <- c(name = pkg_name, version = "0.0.0")
+  setNamespaceInfo(ns_env, "exports", new.env(hash = TRUE, parent = baseenv()))
+  setNamespaceInfo(ns_env, "imports", list(base = TRUE))
+  setNamespaceInfo(ns_env, "path", abs_path)
+  setNamespaceInfo(ns_env, "dynlibs", NULL)
+  setNamespaceInfo(ns_env, "S3methods", matrix(NA_character_, 0L, 4L))
+  ns_env[[".__S3MethodsTable__."]] <- new.env(hash = TRUE, parent = baseenv())
+
+  reg <- rlang::ns_registry_env()
+  reg[[pkg_name]] <- ns_env
+
+  if (isNamespaceLoaded("methods")) {
+    methods::setPackageName(pkg_name, ns_env)
+  }
+
+  ns_env
+}
+
+.loadfast.process_imports <- function(ns_env, nsInfo) {
+  .loadfast.refresh_namespace_metadata(ns_env, nsInfo)
+}
+
+.loadfast.full_load_code <- function(r_files, ns_env, nsInfo = NULL) {
+  .loadfast.source_many(r_files, ns_env)
+
+  if (!is.null(nsInfo)) {
+    .loadfast.refresh_namespace_metadata(ns_env, nsInfo)
+    .loadfast.register_s3_methods(ns_env, nsInfo)
+  }
+
+  invisible(NULL)
+}
+
 .loadfast.source_one <- function(f, ns_env) {
+  .loadfast.source_one_eval(f, ns_env)
+}
+
+.loadfast.source_one_eval <- function(f, ns_env) {
   s4_pattern <- "no definition for class"
-  tryCatch(
+  lines <- readLines(f, warn = FALSE)
+  srcfile <- srcfilecopy(
+    f,
+    lines,
+    file.info(f)[1, "mtime"],
+    isFile = TRUE
+  )
+
+  exprs <- tryCatch(
     withCallingHandlers(
-      sys.source(f, envir = ns_env, keep.source = TRUE),
-      warning = function(w) {
-        if (grepl(s4_pattern, conditionMessage(w), fixed = TRUE)) {
-          invokeRestart("muffleWarning")
-        }
-      },
-      message = function(m) {
-        if (grepl(s4_pattern, conditionMessage(m), fixed = TRUE)) {
-          invokeRestart("muffleMessage")
-        }
+      parse(text = lines, n = -1L, srcfile = srcfile),
+      error = function(e) {
+        stop("Failed to parse ", f, ": ", conditionMessage(e), call. = FALSE)
       }
     ),
+    error = function(e) {
+      stop("Failed to parse ", f, ": ", conditionMessage(e), call. = FALSE)
+    }
+  )
+
+  tryCatch(
+    {
+      for (expr in exprs) {
+        withCallingHandlers(
+          eval(expr, ns_env),
+          warning = function(w) {
+            if (grepl(s4_pattern, conditionMessage(w), fixed = TRUE)) {
+              invokeRestart("muffleWarning")
+            }
+          },
+          message = function(m) {
+            if (grepl(s4_pattern, conditionMessage(m), fixed = TRUE)) {
+              invokeRestart("muffleMessage")
+            }
+          }
+        )
+      }
+    },
     error = function(e) {
       stop("Failed to source ", f, ": ", conditionMessage(e), call. = FALSE)
     }
   )
 }
 
-.loadfast.loaded_package_path <- function(pkg_name) {
-  if (!(pkg_name %in% loadedNamespaces())) {
-    return(NULL)
+.loadfast.refresh_namespace_metadata <- function(ns_env, nsInfo) {
+  if (is.null(nsInfo)) {
+    return(invisible(NULL))
+  }
+
+  impenv <- parent.env(ns_env)
+  existing_imports <- ls(envir = impenv, all.names = TRUE)
+  if (length(existing_imports) > 0L) {
+    rm(list = existing_imports, envir = impenv)
+  }
+
+  for (i in nsInfo$imports) {
+    tryCatch(
+      {
+        if (is.character(i)) {
+          namespaceImport(ns_env, loadNamespace(i), from = ns_env$.packageName)
+        } else if (!is.null(i$except)) {
+          namespaceImport(
+            ns_env,
+            loadNamespace(i[[1L]]),
+            from = ns_env$.packageName,
+            except = i$except
+          )
+        } else {
+          namespaceImportFrom(
+            ns_env,
+            loadNamespace(i[[1L]]),
+            i[[2L]],
+            from = ns_env$.packageName
+          )
+        }
+      },
+      error = function(e) {
+        stop(
+          "Import failed for ",
+          deparse(i),
+          ": ",
+          conditionMessage(e),
+          call. = FALSE
+        )
+      }
+    )
+  }
+
+  for (imp in nsInfo$importClasses) {
+    tryCatch(
+      namespaceImportClasses(
+        ns_env,
+        loadNamespace(imp[[1L]]),
+        imp[[2L]],
+        from = ns_env$.packageName
+      ),
+      error = function(e) {
+        stop(
+          "importClassesFrom failed for ",
+          imp[[1L]],
+          ": ",
+          conditionMessage(e),
+          call. = FALSE
+        )
+      }
+    )
+  }
+
+  for (imp in nsInfo$importMethods) {
+    tryCatch(
+      namespaceImportMethods(
+        ns_env,
+        loadNamespace(imp[[1L]]),
+        imp[[2L]],
+        from = ns_env$.packageName
+      ),
+      error = function(e) {
+        stop(
+          "importMethodsFrom failed for ",
+          imp[[1L]],
+          ": ",
+          conditionMessage(e),
+          call. = FALSE
+        )
+      }
+    )
+  }
+
+  imports_canonical <- list(base = TRUE)
+  for (i in nsInfo$imports) {
+    if (is.character(i)) {
+      imports_canonical[[i]] <- TRUE
+    } else {
+      pkg <- i[[1L]]
+      syms <- i[[2L]]
+      if (isTRUE(imports_canonical[[pkg]])) next
+      imports_canonical[[pkg]] <- c(imports_canonical[[pkg]], syms)
+    }
+  }
+  setNamespaceInfo(ns_env, "imports", imports_canonical)
+
+  exports_env <- getNamespaceInfo(ns_env, "exports")
+  existing_exports <- ls(envir = exports_env, all.names = TRUE)
+  if (length(existing_exports) > 0L) {
+    rm(list = existing_exports, envir = exports_env)
+  }
+  exports <- nsInfo$exports
+  if (length(exports) > 0L) {
+    namespaceExport(ns_env, exports)
+  }
+
+  invisible(NULL)
+}
+
+.loadfast.register_s3_methods <- function(ns_env, nsInfo) {
+  if (is.null(nsInfo) || is.null(nsInfo$S3methods) || length(nsInfo$S3methods) == 0L) {
+    return(invisible(NULL))
   }
 
   tryCatch(
-    {
-      loaded_path <- getNamespaceInfo(asNamespace(pkg_name), "path")
-      if (is.null(loaded_path) || !nzchar(loaded_path)) NULL else normalizePath(loaded_path, mustWork = FALSE)
-    },
-    error = function(e) NULL
+    registerS3methods(nsInfo$S3methods, ns_env$.packageName, ns_env),
+    error = function(e) {
+      stop("registerS3methods failed: ", conditionMessage(e), call. = FALSE)
+    }
   )
+
+  invisible(NULL)
+}
+
+.loadfast.sync_pkg_env <- function(ns_env, pkg_env) {
+  pkg_objects <- ls(envir = pkg_env, all.names = TRUE)
+  if (length(pkg_objects) > 0L) {
+    rm(list = pkg_objects, envir = pkg_env)
+  }
+
+  list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
+  list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
+
+  invisible(NULL)
 }
 
 .loadfast.source_helpers <- function(abs_path, pkg_env, helpers, attach_testthat, pkg_name) {
@@ -587,4 +777,102 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
     }
     current <- parent
   }
+}
+
+.loadfast.loaded_package_path <- function(pkg_name) {
+  if (!(pkg_name %in% loadedNamespaces())) {
+    return(NULL)
+  }
+
+  tryCatch(
+    {
+      loaded_path <- getNamespaceInfo(asNamespace(pkg_name), "path")
+      if (is.null(loaded_path) || !nzchar(loaded_path)) NULL else normalizePath(loaded_path, mustWork = FALSE)
+    },
+    error = function(e) NULL
+  )
+}
+
+
+
+.loadfast.dependency_fingerprint <- function(nsInfo) {
+  if (is.null(nsInfo) || length(nsInfo$imports) == 0L) {
+    return(NULL)
+  }
+
+  imported_packages <- unique(vapply(
+    nsInfo$imports,
+    function(i) if (is.character(i)) i else i[[1L]],
+    character(1)
+  ))
+  imported_packages <- imported_packages[nzchar(imported_packages)]
+
+  if (length(imported_packages) == 0L) {
+    return(NULL)
+  }
+
+  custom_imports <- imported_packages[grepl("pkg$", imported_packages)]
+
+  cached_imports <- imported_packages[vapply(
+    imported_packages,
+    function(import_pkg) .loadfast.cache_has_package(import_pkg),
+    logical(1)
+  )]
+
+  if (length(cached_imports) == 0L) {
+    return(NULL)
+  }
+
+  fingerprint <- stats::setNames(
+    vapply(
+      cached_imports,
+      function(import_pkg) {
+        if (!(import_pkg %in% loadedNamespaces())) {
+          return("UNLOADED")
+        }
+
+        ns_env <- tryCatch(asNamespace(import_pkg), error = function(e) NULL)
+        if (is.null(ns_env)) {
+          return("UNAVAILABLE")
+        }
+
+        ns_path <- tryCatch(getNamespaceInfo(ns_env, "path"), error = function(e) NULL)
+        ns_path <- if (is.null(ns_path) || !nzchar(ns_path)) "" else normalizePath(ns_path, mustWork = FALSE)
+
+        path_cache <- .loadfast.cache_entry_for_package(import_pkg)
+        path_hash <- if (is.null(path_cache) || is.null(path_cache$hashes)) {
+          ""
+        } else {
+          paste(names(path_cache$hashes), unname(path_cache$hashes), collapse = "|")
+        }
+
+        paste0(ns_path, "::", path_hash)
+      },
+      character(1)
+    ),
+    cached_imports
+  )
+
+  fingerprint
+}
+
+.loadfast.cache_entry_for_package <- function(pkg_name) {
+  if (!exists(pkg_name, envir = .loadfast.cache.by_pkg, inherits = FALSE)) {
+    return(NULL)
+  }
+
+  cache_key <- .loadfast.cache.by_pkg[[pkg_name]]
+  if (!is.character(cache_key) || length(cache_key) != 1L || !nzchar(cache_key)) {
+    return(NULL)
+  }
+
+  if (!exists(cache_key, envir = .loadfast.cache, inherits = FALSE)) {
+    return(NULL)
+  }
+
+  .loadfast.cache[[cache_key]]
+}
+
+.loadfast.cache_has_package <- function(pkg_name) {
+  !is.null(.loadfast.cache_entry_for_package(pkg_name))
 }
