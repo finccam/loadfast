@@ -2,10 +2,12 @@ Package: loadfast
 Title: Fast Incremental Package Loader for Interactive Development
 Version: 0.0.1
 Authors@R: person(given = "Finccam", family = "Team", email = "engineering@finccam.com", role = c("aut", "cre"))
-Description: Provides a fast replacement for development-time package loading
-    with MD5-based incremental reloading, proper namespace construction, and
-    support for testthat helpers.
+Description: Fast incremental reloading for interactive development on large
+    R packages. Intended for edit-reload-test workflows where
+    devtools::load_all() becomes a bottleneck.
 License: MIT + file LICENSE
+URL: https://github.com/finccam/loadfast
+BugReports: https://github.com/finccam/loadfast/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
