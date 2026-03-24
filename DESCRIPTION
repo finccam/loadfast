@@ -13,6 +13,5 @@ Imports:
     rlang
 Suggests:
     testthat,
-    rstudioapi,
     R6,
     data.table

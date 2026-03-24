@@ -4,7 +4,7 @@
 
 For a given package path, `loadfast` performs a full load on the first call, then uses MD5-based change detection to re-source only changed `R/` files on subsequent calls.
 
-`loadfast` is intended for the edit-reload-test loop, not as a general replacement `devtools::load_all()` . The main tradeoff is described in [Important limitation: incremental reload does not clean up stale symbols](#important-limitation-incremental-reload-does-not-clean-up-stale-symbols).
+`loadfast` is intended for the edit-reload-test loop, not as a general replacement for `devtools::load_all()`. The main tradeoff is described in [Important limitation: incremental reload does not clean up stale symbols](#important-limitation-incremental-reload-does-not-clean-up-stale-symbols).
 
 At runtime, `loadfast` does not depend on `pkgload` or `devtools`. Its main runtime dependency is `rlang`.
 
@@ -53,18 +53,18 @@ For performance, the incremental path does **not** track which symbols came from
 
 This is a conscious tradeoff, not a claim that cleanup is impossible in principle. We have not found a performant enough implementation yet for the large-project use case `loadfast` targets. Approaches based on per-file symbol diffing and repeated enumeration of large namespaces were too slow.
 
-This means that after an incremental reload:
+After an incremental reload:
 
 - deleted files can leave old objects behind
 - removed variables or functions can remain available in the loaded package until you force a full rebuild
 
-Pass `full = TRUE` to force a complete teardown+rebuild. You should do this after deleting files, removing functions, or whenever you need a clean namespace state.
+Use `full = TRUE` after deleting files, removing functions, or whenever you need a clean namespace state.
 
 ## Editor setup
 
 ### RStudio
 
-After installation, the addin is available from the addin dropdown as `LOADFAST > Load Fast`.
+After installation, the addin is available from the Addins menu as `LOADFAST > Load Fast`.
 
 To bind it to a keyboard shortcut:
 
@@ -94,7 +94,7 @@ You can bind `loadfast::load_fast()` in the Zed keymap:
 ```json
 "ctrl-shift-l": [
   "workspace::SendKeystrokes",
-  "l o a d f a s t : : l o a d _ f a s t ( )" # you need a shortcut to focus terminal first
+  "l o a d f a s t : : l o a d _ f a s t ( )"  # you to add a command to focus the terminal first
 ]
 ```
 

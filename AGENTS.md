@@ -14,7 +14,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - This repo **is** the source-of-truth edit target for the `loadfast` package. If you are changing loader behavior, docs, or tests for `loadfast`, make the change here.
 - **`R/loadfast.R`** contains the canonical loader implementation exported by the package. It provides MD5-based incremental reloading: on first call it does a full teardown+rebuild; on subsequent calls for the same path it re-sources only files whose MD5 hash changed. See "Incremental loader" section below.
 - **`DESCRIPTION`**, **`NAMESPACE`**, and **`inst/rstudio/addins.dcf`** define the installable package and its RStudio addin registration.
-- **`test_loadfast.R`** is the top-level custom test runner. Keep this as the single command users run.
+- **`test_loadfast.R`** is the single custom test runner. It sources `R/loadfast.R` directly and remains the single command users run.
 - **`devpackage/`** is the single frozen baseline package snapshot used by the tests. Contains `DESCRIPTION`, `NAMESPACE`, `R/` (source files), and `tests/testthat/` (testthat tests + helpers). Package name is `devpackage`. All code mutations for reload/incremental testing are applied ad-hoc to temp copies at test time.
   - `R/base.R` — plain functions (`add`, `scale_vector`, `summarize_values`, `mutate_dt`) — `mutate_dt` exercises `data.table`'s `:=` and `as.data.table` via `importFrom`
   - `R/s4_classes.R` — S4 classes (`Animal`, `Pet`), generics, methods
@@ -28,7 +28,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 ## Shared design decisions
 
 - The package name is **read from the `Package:` field in DESCRIPTION**. No hard-coding required — just set the field in your DESCRIPTION file.
-- `load_fast(path)` takes a **path to a package root** (a directory containing `DESCRIPTION`, `NAMESPACE`, and `R/`). It does not assume `.`.
+- `load_fast(path)` accepts a package root or any path inside a package. It walks upward until it finds a directory containing `DESCRIPTION`, `NAMESPACE`, and `R/`.
 - Requires **`rlang`** as a runtime dependency (for `rlang::ns_registry_env()`). The user already has it because they use devtools.
 - DESCRIPTION is parsed only for the `Package:` field. Imports are read from the **NAMESPACE** file.
 - `load_fast()` accepts `helpers` and `attach_testthat` parameters (mirroring pkgload's `load_all`). When `helpers = TRUE` (the default) and testthat is available, it calls `testthat::source_test_helpers()` to source `helper*.R` files from `tests/testthat/` into the attached package environment — the same behavior as pkgload.
@@ -51,8 +51,8 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 
 - The `check()` helper wraps test expressions in `quote()` and evaluates with `eval(..., envir = parent.frame())`. Without `quote()`, errors from the assertion itself would escape `tryCatch`.
 - `testthat::test_dir()` runs only once (Stage 1, against the frozen `devpackage/` snapshot). Subsequent stages verify behavior via `check()` assertions, which already cover everything the testthat suite tests.
-- **`on.exit()` cannot be used at the top level of `run_tests.R`** because it is `source()`'d from a wrapper script. Inside `source()`, `on.exit()` registers on the `eval()` frame which exits immediately, causing premature cleanup. Temp directories are instead tracked in `.tmp_dirs` and cleaned up explicitly at the end of the file.
-- **Test stages** (all in `run_tests.R`):
+- **`on.exit()` cannot be used at the top level of `test_loadfast.R`** for suite-wide cleanup because the file is executed as a script and the suite manages temp directories explicitly through `.tmp_dirs`.
+- **Test stages** (all in `test_loadfast.R`):
   - **Stage 1**: Load frozen `devpackage/` from its original location. Full checks (namespace, imports, S4, R6, data.table, testthat helpers) + `test_dir()` run.
   - **Stage 2**: Copy `devpackage/` to a temp dir, apply mutations via `writeLines()` (changed function behavior, new S4 slots, new R6 methods, updated testthat helpers), load, verify all changed behavior. The mutations change behavior across all three class systems (plain functions, S4, R6) so the reload path is exercised for each.
   - **Stage 3**: Copy `devpackage/` to a second temp dir, test cross-file dependencies:
