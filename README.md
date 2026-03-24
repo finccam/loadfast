@@ -60,9 +60,43 @@ This means that after an incremental reload:
 
 Pass `full = TRUE` to force a complete teardown+rebuild. You should do this after deleting files, removing functions, or whenever you need a clean namespace state.
 
-## RStudio addin
+## Editor setup
 
-`loadfast` includes an RStudio addin that can be bound to a keyboard shortcut.
+### RStudio
+
+After installation, the addin is available from the addin dropdown as `LOADFAST > Load Fast`.
+
+To bind it to a keyboard shortcut:
+
+1. Open `Tools > Modify Keyboard Shortcuts`
+2. Filter for `Load fast`
+3. Assign the shortcut you want
+
+### VS Code
+
+You can bind `loadfast::load_fast()` directly in `keybindings.json`:
+
+```json
+{
+  "key": "ctrl+shift+l",
+  "command": "workbench.action.terminal.sendSequence",
+  "args": {
+    "text": "loadfast::load_fast()\n"
+  },
+  "when": "editorTextFocus && editorLangId == 'r' || terminalFocus"
+}
+```
+
+### Zed
+
+You can bind `loadfast::load_fast()` in the Zed keymap:
+
+```json
+"ctrl-shift-l": [
+  "workspace::SendKeystrokes",
+  "l o a d f a s t : : l o a d _ f a s t ( )" # you need a shortcut to focus terminal first
+]
+```
 
 ## Testing
 
