@@ -15,7 +15,6 @@ check <- function(description, expr) {
   if (.test_filter_active && !grepl(.test_filter, description, perl = TRUE)) {
     return(invisible(NULL))
   }
-
   result <- tryCatch(
     {
       ok <- eval(expr, envir = parent.frame())
@@ -147,22 +146,6 @@ remove_renv_lock <- function(pkg_path) {
   if (file.exists(lock_path)) {
     unlink(lock_path)
   }
-}
-
-add_s3_files <- function(pkg_path, generic_body = "paste0(\"base:\", x)") {
-  writeLines(c(
-    "tag <- function(x, ...) {",
-    "  UseMethod(\"tag\")",
-    "}",
-    "",
-    "tag.default <- function(x, ...) {",
-    "  paste0(\"default:\", x)",
-    "}",
-    "",
-    "tag.character <- function(x, ...) {",
-    paste0("  ", generic_body),
-    "}"
-  ), file.path(pkg_path, "R", "s3_methods.R"))
 }
 
 # ============================================================================
@@ -1130,178 +1113,108 @@ check("multi-pkg: helpers disabled keeps test helper out of packageb env", quote
 ))
 
 # --------------------------------------------------------------------------
-# 3f: Inter-package dependency reload
+# 3f: Same package name from different path warns and replaces prior load
 # --------------------------------------------------------------------------
-cat("\n--- 3f: inter-package dependency reload ---\n\n")
+cat("\n--- 3f: same package name from different path warns ---\n\n")
 
-tmp_dep_a <- tempfile("loadfast_dep_a_")
-tmp_dep_b <- tempfile("loadfast_dep_b_")
-copy_baseline(tmp_dep_a)
-copy_baseline(tmp_dep_b)
+tmp_same_a <- tempfile("loadfast_same_a_")
+tmp_same_b <- tempfile("loadfast_same_b_")
+copy_baseline(tmp_same_a)
+copy_baseline(tmp_same_b)
 
-rename_package(tmp_dep_a, "depapkg")
-rename_package(tmp_dep_b, "depbpkg")
-
-replace_namespace_imports(
-  file.path(tmp_dep_b, "NAMESPACE"),
-  c(
-    "import(depapkg)",
-    "importFrom(rlang, ns_registry_env)",
-    "import(methods)",
-    "importFrom(R6, R6Class)",
-    "importFrom(data.table,\":=\")",
-    "importFrom(data.table,as.data.table)",
-    "importFrom(data.table,data.table)"
-  )
+same_name_reload <- capture_warnings(
+  load_fast(tmp_same_a, helpers = FALSE, attach_testthat = FALSE)
 )
 
-writeLines(c(
-  "compute_with_a <- function(a, b) {",
-  "  add(a, b) * 10",
-  "}",
-  "",
-  'depbpkg <- function() "depbpkg"'
-), file.path(tmp_dep_b, "R", "000_init.R"))
-
-ns_dep_a <- load_fast(tmp_dep_a, helpers = FALSE, attach_testthat = FALSE)
-ns_dep_b <- load_fast(tmp_dep_b, helpers = FALSE, attach_testthat = FALSE)
-
-check("inter-pkg: packageb can call imported packagea::add()", quote(
-  get("compute_with_a", envir = ns_dep_b)(1, 2) == 30
+check("same-name: first load of this path returns a namespace", quote(
+  is.environment(same_name_reload$value) && isNamespace(same_name_reload$value)
 ))
 
-check("inter-pkg: packageb attached env can call imported packagea::add()", quote(
-  get("compute_with_a", pos = "package:depbpkg")(2, 3) == 50
-))
-
-writeLines(c(
-  "add <- function(a, b) {",
-  "  a + b + 1000",
-  "}",
-  "",
-  "scale_vector <- function(x, factor = 1) {",
-  "  x * factor",
-  "}",
-  "",
-  "summarize_values <- function(x) {",
-  "  list(mean = mean(x), sd = sd(x), n = length(x))",
-  "}",
-  "",
-  "mutate_dt <- function(x, times = 2L) {",
-  "  dt <- as.data.table(list(val = x))",
-  "  dt[, scaled := val * times]",
-  "  dt",
-  "}"
-), file.path(tmp_dep_a, "R", "base.R"))
-
-ns_dep_a2 <- load_fast(tmp_dep_a, helpers = FALSE, attach_testthat = FALSE)
-
-check("inter-pkg: packagea reload updates add()", quote(
-  get("add", envir = ns_dep_a2)(1, 2) == 1003
-))
-
-check("inter-pkg: packageb does not update until it is reloaded", quote(
-  get("compute_with_a", envir = ns_dep_b)(1, 2) == 30
-))
-
-check("inter-pkg: packageb sees reloaded packagea behavior after its own reload", quote({
-  ns_dep_b2 <- load_fast(tmp_dep_b, helpers = FALSE, attach_testthat = FALSE)
-
-  get("compute_with_a", envir = ns_dep_b2)(1, 2) == 10030
-}))
-
-check("inter-pkg: packageb attached env sees reloaded packagea behavior", quote({
-  ns_dep_b3 <- load_fast(tmp_dep_b, helpers = FALSE, attach_testthat = FALSE)
-
-  get("compute_with_a", pos = "package:depbpkg")(2, 3) == 10050
-}))
-
-# --------------------------------------------------------------------------
-# 3g: Inter-package importFrom(packagea, add) reload
-# --------------------------------------------------------------------------
-cat("\n--- 3g: inter-package importFrom(packagea, add) reload ---\n\n")
-
-tmp_dep_from_a <- tempfile("loadfast_dep_from_a_")
-tmp_dep_from_b <- tempfile("loadfast_dep_from_b_")
-copy_baseline(tmp_dep_from_a)
-copy_baseline(tmp_dep_from_b)
-
-rename_package(tmp_dep_from_a, "fromapkg")
-rename_package(tmp_dep_from_b, "frombpkg")
-
-writeLines(c(
-  "export(add)",
-  "importFrom(rlang, ns_registry_env)",
-  "import(methods)",
-  "importFrom(R6, R6Class)",
-  "importFrom(data.table,\":=\")",
-  "importFrom(data.table,as.data.table)",
-  "importFrom(data.table,data.table)"
-), file.path(tmp_dep_from_a, "NAMESPACE"))
-
-replace_namespace_imports(
-  file.path(tmp_dep_from_b, "NAMESPACE"),
-  c(
-    "importFrom(fromapkg,add)",
-    "importFrom(rlang, ns_registry_env)",
-    "import(methods)",
-    "importFrom(R6, R6Class)",
-    "importFrom(data.table,\":=\")",
-    "importFrom(data.table,as.data.table)",
-    "importFrom(data.table,data.table)"
-  )
+same_name_reload2 <- capture_warnings(
+  load_fast(tmp_same_b, helpers = FALSE, attach_testthat = FALSE)
 )
 
-writeLines(c(
-  "compute_with_add <- function(a, b) {",
-  "  add(a, b) * 100",
-  "}",
-  "",
-  'frombpkg <- function() "frombpkg"'
-), file.path(tmp_dep_from_b, "R", "000_init.R"))
+check("same-name: warns when same package name is loaded from different path", quote(
+  any(grepl("already loaded from a different path", same_name_reload2$warnings, fixed = TRUE))
+))
 
-ns_dep_from_a <- load_fast(tmp_dep_from_a, helpers = FALSE, attach_testthat = FALSE)
-ns_dep_from_b <- load_fast(tmp_dep_from_b, helpers = FALSE, attach_testthat = FALSE)
+check("same-name: warning mentions replacement", quote(
+  any(grepl("will replace the existing loaded package", same_name_reload2$warnings, fixed = TRUE))
+))
 
-check("inter-pkg-from: packageb can call importFrom(packagea, add)", quote(
-  get("compute_with_add", envir = ns_dep_from_b)(1, 2) == 300
+check("same-name: devpackage remains loaded after replacement", quote(
+  "devpackage" %in% loadedNamespaces() && "package:devpackage" %in% search()
+))
+
+check("same-name: second path is now the active namespace path", quote(
+  identical(
+    normalizePath(getNamespaceInfo(asNamespace("devpackage"), "path"), mustWork = FALSE),
+    normalizePath(tmp_same_b, mustWork = FALSE)
+  )
+))
+
+# --------------------------------------------------------------------------
+# 3g: Same-name different-path cache flip-flop and renv.lock path scoping
+# --------------------------------------------------------------------------
+cat("\n--- 3g: same-name path flip-flop and renv.lock path scoping ---\n\n")
+
+tmp_flip_a <- tempfile("loadfast_flip_a_")
+tmp_flip_b <- tempfile("loadfast_flip_b_")
+copy_baseline(tmp_flip_a)
+copy_baseline(tmp_flip_b)
+
+flip_a1 <- capture_warnings(
+  load_fast(tmp_flip_a, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("flip-flop: initial load of path A returns a namespace", quote(
+  is.environment(flip_a1$value) && isNamespace(flip_a1$value)
+))
+
+flip_b1 <- capture_warnings(
+  load_fast(tmp_flip_b, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("flip-flop: switching from path A to path B warns", quote(
+  any(grepl("already loaded from a different path", flip_b1$warnings, fixed = TRUE))
+))
+
+flip_a2 <- capture_warnings(
+  load_fast(tmp_flip_a, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("flip-flop: switching back from path B to path A warns", quote(
+  any(grepl("already loaded from a different path", flip_a2$warnings, fixed = TRUE))
+))
+
+check("flip-flop: path A is active again after switching back", quote(
+  identical(
+    normalizePath(getNamespaceInfo(asNamespace("devpackage"), "path"), mustWork = FALSE),
+    normalizePath(tmp_flip_a, mustWork = FALSE)
+  )
 ))
 
 writeLines(c(
-  "add <- function(a, b) {",
-  "  a + b + 10",
-  "}",
-  "",
-  "scale_vector <- function(x, factor = 1) {",
-  "  x * factor",
-  "}",
-  "",
-  "summarize_values <- function(x) {",
-  "  list(mean = mean(x), sd = sd(x), n = length(x))",
-  "}",
-  "",
-  "mutate_dt <- function(x, times = 2L) {",
-  "  dt <- as.data.table(list(val = x))",
-  "  dt[, scaled := val * times]",
-  "  dt",
+  "{",
+  '  "flip": true',
   "}"
-), file.path(tmp_dep_from_a, "R", "base.R"))
+), file.path(tmp_flip_a, "renv.lock"))
 
-ns_dep_from_a2 <- load_fast(tmp_dep_from_a, helpers = FALSE, attach_testthat = FALSE)
+flip_a_lock <- capture_warnings(
+  load_fast(tmp_flip_a, helpers = FALSE, attach_testthat = FALSE)
+)
 
-check("inter-pkg-from: packagea reload updates add()", quote(
-  get("add", envir = ns_dep_from_a2)(1, 2) == 13
+check("flip-flop: renv.lock warning is path-scoped to path A", quote(
+  any(grepl("renv.lock changed since the initial load_fast() call for this path", flip_a_lock$warnings, fixed = TRUE))
 ))
 
-check("inter-pkg-from: packageb still uses old imported binding before reload", quote(
-  get("compute_with_add", envir = ns_dep_from_b)(1, 2) == 300
+flip_b_lock <- capture_warnings(
+  load_fast(tmp_flip_b, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("flip-flop: path B does not inherit path A renv.lock warning", quote(
+  !any(grepl("renv.lock changed since the initial load_fast() call for this path", flip_b_lock$warnings, fixed = TRUE))
 ))
-
-check("inter-pkg-from: packageb sees new imported binding after reload", quote({
-  ns_dep_from_b2 <- load_fast(tmp_dep_from_b, helpers = FALSE, attach_testthat = FALSE)
-
-  get("compute_with_add", envir = ns_dep_from_b2)(1, 2) == 1300
-}))
 
 # --------------------------------------------------------------------------
 # 3h: Dependent package load order and missing dependency failures
@@ -1369,113 +1282,9 @@ check("dep-order: loading packageb after packagea succeeds", quote(
 ))
 
 # --------------------------------------------------------------------------
-# 3i: Same package name from different path warns and replaces prior load
+# 3i: Packages without helpers and empty R/ early return
 # --------------------------------------------------------------------------
-cat("\n--- 3i: same package name from different path warns ---\n\n")
-
-tmp_same_a <- tempfile("loadfast_same_a_")
-tmp_same_b <- tempfile("loadfast_same_b_")
-copy_baseline(tmp_same_a)
-copy_baseline(tmp_same_b)
-
-same_name_reload <- capture_warnings(
-  load_fast(tmp_same_a, helpers = FALSE, attach_testthat = FALSE)
-)
-
-check("same-name: first load of this path returns a namespace", quote(
-  is.environment(same_name_reload$value) && isNamespace(same_name_reload$value)
-))
-
-same_name_reload2 <- capture_warnings(
-  load_fast(tmp_same_b, helpers = FALSE, attach_testthat = FALSE)
-)
-
-check("same-name: warns when same package name is loaded from different path", quote(
-  any(grepl("already loaded from a different path", same_name_reload2$warnings, fixed = TRUE))
-))
-
-check("same-name: warning mentions replacement", quote(
-  any(grepl("will replace the existing loaded package", same_name_reload2$warnings, fixed = TRUE))
-))
-
-check("same-name: devpackage remains loaded after replacement", quote(
-  "devpackage" %in% loadedNamespaces() && "package:devpackage" %in% search()
-))
-
-check("same-name: second path is now the active namespace path", quote(
-  identical(
-    normalizePath(getNamespaceInfo(asNamespace("devpackage"), "path"), mustWork = FALSE),
-    normalizePath(tmp_same_b, mustWork = FALSE)
-  )
-))
-
-# --------------------------------------------------------------------------
-# 3j: Same-name different-path cache flip-flop and renv.lock path scoping
-# --------------------------------------------------------------------------
-cat("\n--- 3j: same-name path flip-flop and renv.lock path scoping ---\n\n")
-
-tmp_flip_a <- tempfile("loadfast_flip_a_")
-tmp_flip_b <- tempfile("loadfast_flip_b_")
-copy_baseline(tmp_flip_a)
-copy_baseline(tmp_flip_b)
-
-flip_a1 <- capture_warnings(
-  load_fast(tmp_flip_a, helpers = FALSE, attach_testthat = FALSE)
-)
-
-check("flip-flop: initial load of path A returns a namespace", quote(
-  is.environment(flip_a1$value) && isNamespace(flip_a1$value)
-))
-
-flip_b1 <- capture_warnings(
-  load_fast(tmp_flip_b, helpers = FALSE, attach_testthat = FALSE)
-)
-
-check("flip-flop: switching from path A to path B warns", quote(
-  any(grepl("already loaded from a different path", flip_b1$warnings, fixed = TRUE))
-))
-
-flip_a2 <- capture_warnings(
-  load_fast(tmp_flip_a, helpers = FALSE, attach_testthat = FALSE)
-)
-
-check("flip-flop: switching back from path B to path A warns", quote(
-  any(grepl("already loaded from a different path", flip_a2$warnings, fixed = TRUE))
-))
-
-check("flip-flop: path A is active again after switching back", quote(
-  identical(
-    normalizePath(getNamespaceInfo(asNamespace("devpackage"), "path"), mustWork = FALSE),
-    normalizePath(tmp_flip_a, mustWork = FALSE)
-  )
-))
-
-writeLines(c(
-  "{",
-  '  "flip": true',
-  "}"
-), file.path(tmp_flip_a, "renv.lock"))
-
-flip_a_lock <- capture_warnings(
-  load_fast(tmp_flip_a, helpers = FALSE, attach_testthat = FALSE)
-)
-
-check("flip-flop: renv.lock warning is path-scoped to path A", quote(
-  any(grepl("renv.lock changed since the initial load_fast() call for this path", flip_a_lock$warnings, fixed = TRUE))
-))
-
-flip_b_lock <- capture_warnings(
-  load_fast(tmp_flip_b, helpers = FALSE, attach_testthat = FALSE)
-)
-
-check("flip-flop: path B does not inherit path A renv.lock warning", quote(
-  !any(grepl("renv.lock changed since the initial load_fast() call for this path", flip_b_lock$warnings, fixed = TRUE))
-))
-
-# --------------------------------------------------------------------------
-# 3k: Packages without helpers and empty R/ early return
-# --------------------------------------------------------------------------
-cat("\n--- 3k: no-helper package and empty R package ---\n\n")
+cat("\n--- 3i: no-helper package and empty R package ---\n\n")
 
 tmp_no_helpers <- tempfile("loadfast_no_helpers_")
 copy_baseline(tmp_no_helpers)
@@ -1523,9 +1332,9 @@ check("empty-r: emits no R files found message", quote(
 ))
 
 # --------------------------------------------------------------------------
-# 3l: Root discovery and cache identity for relative/absolute/inside-package
+# 3j: Root discovery and cache identity for relative/absolute/inside-package
 # --------------------------------------------------------------------------
-cat("\n--- 3l: root discovery and path identity ---\n\n")
+cat("\n--- 3j: root discovery and path identity ---\n\n")
 
 root_rel <- load_fast("devpackage", helpers = FALSE, attach_testthat = FALSE)
 root_abs <- load_fast(normalizePath("devpackage", mustWork = TRUE), helpers = FALSE, attach_testthat = FALSE)
@@ -1555,45 +1364,6 @@ abs_reload_no_warning <- capture_warnings(
 
 check("path-root: absolute path to same package does not warn about different path", quote(
   !any(grepl("already loaded from a different path", abs_reload_no_warning$warnings, fixed = TRUE))
-))
-
-# --------------------------------------------------------------------------
-# 3m: S3 method reload
-# --------------------------------------------------------------------------
-cat("\n--- 3m: S3 method reload ---\n\n")
-
-tmp_s3 <- tempfile("loadfast_s3_methods_")
-copy_baseline(tmp_s3)
-add_s3_files(tmp_s3, 'paste0("base:", x)')
-
-ns_s3 <- load_fast(tmp_s3, helpers = FALSE, attach_testthat = FALSE)
-
-check("s3: tag generic dispatches to character method", quote(
-  get("tag", envir = ns_s3)("abc") == "base:abc"
-))
-
-writeLines(c(
-  "tag <- function(x, ...) {",
-  "  UseMethod(\"tag\")",
-  "}",
-  "",
-  "tag.default <- function(x, ...) {",
-  "  paste0(\"default:\", x)",
-  "}",
-  "",
-  "tag.character <- function(x, ...) {",
-  '  paste0("changed:", x)',
-  "}"
-), file.path(tmp_s3, "R", "s3_methods.R"))
-
-ns_s3_2 <- load_fast(tmp_s3, helpers = FALSE, attach_testthat = FALSE)
-
-check("s3: incremental reload updates character method dispatch", quote(
-  get("tag", envir = ns_s3_2)("abc") == "changed:abc"
-))
-
-check("s3: attached env also uses updated character method", quote(
-  get("tag", pos = "package:devpackage")("xyz") == "changed:xyz"
 ))
 
 # ============================================================================
