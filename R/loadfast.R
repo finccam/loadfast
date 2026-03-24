@@ -57,6 +57,19 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   if (!nzchar(pkg_name)) stop("No valid 'Package' field found in DESCRIPTION")
 
   pkg_env_name <- paste0("package:", pkg_name)
+  loaded_pkg_path <- .loadfast.loaded_package_path(pkg_name)
+
+  if (!is.null(loaded_pkg_path) && !identical(loaded_pkg_path, abs_path)) {
+    warning(
+      "Package '", pkg_name, "' is already loaded from a different path: ",
+      loaded_pkg_path,
+      ". Reloading from ",
+      abs_path,
+      " will replace the existing loaded package.",
+      call. = FALSE
+    )
+  }
+
   r_dir <- file.path(abs_path, "R")
   if (!dir.exists(r_dir)) stop("Directory does not exist: ", r_dir_display)
 
@@ -139,6 +152,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       }
       .loadfast.cache[[abs_path]] <- list(
         ns_env = ns_env,
+        pkg_name = pkg_name,
         hashes = current_hashes,
         lock_hash = old_lock_hash,
         registered_reload_files = character(0),
@@ -165,6 +179,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
     .loadfast.cache[[abs_path]] <- list(
       ns_env = ns_env,
+      pkg_name = pkg_name,
       hashes = current_hashes,
       lock_hash = old_lock_hash,
       registered_reload_files = character(0),
@@ -375,6 +390,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
   .loadfast.cache[[abs_path]] <- list(
     ns_env = ns_env,
+    pkg_name = pkg_name,
     hashes = current_hashes,
     lock_hash = current_lock_hash,
     registered_reload_files = character(0),
@@ -537,4 +553,18 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
     }
     current <- parent
   }
+}
+
+.loadfast.loaded_package_path <- function(pkg_name) {
+  if (!(pkg_name %in% loadedNamespaces())) {
+    return(NULL)
+  }
+
+  tryCatch(
+    {
+      loaded_path <- getNamespaceInfo(asNamespace(pkg_name), "path")
+      if (is.null(loaded_path) || !nzchar(loaded_path)) NULL else normalizePath(loaded_path, mustWork = FALSE)
+    },
+    error = function(e) NULL
+  )
 }
