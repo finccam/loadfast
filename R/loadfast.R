@@ -41,12 +41,18 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   }
 
   abs_path <- .loadfast.find_package_root(path)
+  path_input <- normalizePath(path, mustWork = TRUE)
   path_display <- if (identical(path, ".")) {
     basename(abs_path)
   } else if (grepl("^(?:[A-Za-z]:[/\\\\]|[/\\\\])", path)) {
     basename(abs_path)
   } else {
-    path
+    rel_path <- sub(
+      paste0("^", gsub("([][{}()+*^$.|\\\\?])", "\\\\\\1", chartr("\\", "/", normalizePath(getwd(), mustWork = TRUE))), "/?"),
+      "",
+      chartr("\\", "/", path_input)
+    )
+    if (identical(rel_path, chartr("\\", "/", abs_path))) basename(abs_path) else rel_path
   }
   r_dir_display <- file.path(path_display, "R")
 
@@ -57,6 +63,19 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   if (!nzchar(pkg_name)) stop("No valid 'Package' field found in DESCRIPTION")
 
   pkg_env_name <- paste0("package:", pkg_name)
+  loaded_pkg_path <- .loadfast.loaded_package_path(pkg_name)
+
+  if (!is.null(loaded_pkg_path) && !identical(loaded_pkg_path, abs_path)) {
+    warning(
+      "Package '", pkg_name, "' is already loaded from a different path: ",
+      loaded_pkg_path,
+      ". Reloading from ",
+      abs_path,
+      " will replace the existing loaded package.",
+      call. = FALSE
+    )
+  }
+
   r_dir <- file.path(abs_path, "R")
   if (!dir.exists(r_dir)) stop("Directory does not exist: ", r_dir_display)
 
@@ -97,8 +116,15 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     cached <- .loadfast.cache[[abs_path]]
   }
 
+  active_ns_env <- if (pkg_name %in% loadedNamespaces()) {
+    tryCatch(asNamespace(pkg_name), error = function(e) NULL)
+  } else {
+    NULL
+  }
+
   can_incremental <- !is.null(cached) &&
-    pkg_name %in% loadedNamespaces() &&
+    !is.null(active_ns_env) &&
+    identical(cached$ns_env, active_ns_env) &&
     pkg_env_name %in% search()
 
   if (can_incremental) {
@@ -139,6 +165,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       }
       .loadfast.cache[[abs_path]] <- list(
         ns_env = ns_env,
+        pkg_name = pkg_name,
         hashes = current_hashes,
         lock_hash = old_lock_hash,
         registered_reload_files = character(0),
@@ -165,6 +192,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
     .loadfast.cache[[abs_path]] <- list(
       ns_env = ns_env,
+      pkg_name = pkg_name,
       hashes = current_hashes,
       lock_hash = old_lock_hash,
       registered_reload_files = character(0),
@@ -275,7 +303,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
           }
         },
         error = function(e) {
-          warning(
+          stop(
             "Import failed for ",
             deparse(i),
             ": ",
@@ -296,7 +324,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
           from = pkg_name
         ),
         error = function(e) {
-          warning(
+          stop(
             "importClassesFrom failed for ",
             imp[[1L]],
             ": ",
@@ -316,7 +344,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
           from = pkg_name
         ),
         error = function(e) {
-          warning(
+          stop(
             "importMethodsFrom failed for ",
             imp[[1L]],
             ": ",
@@ -350,6 +378,13 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   }
   .timer(paste0("source ", length(r_files), " files"))
 
+  if (file.exists(ns_file)) {
+    exports <- nsInfo$exports
+    if (length(exports) > 0L) {
+      namespaceExport(ns_env, exports)
+    }
+  }
+
   uses_testthat <- local({
     test_dirs <- c(
       file.path(abs_path, "inst", "tests"),
@@ -375,6 +410,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
 
   .loadfast.cache[[abs_path]] <- list(
     ns_env = ns_env,
+    pkg_name = pkg_name,
     hashes = current_hashes,
     lock_hash = current_lock_hash,
     registered_reload_files = character(0),
@@ -482,6 +518,20 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
   )
 }
 
+.loadfast.loaded_package_path <- function(pkg_name) {
+  if (!(pkg_name %in% loadedNamespaces())) {
+    return(NULL)
+  }
+
+  tryCatch(
+    {
+      loaded_path <- getNamespaceInfo(asNamespace(pkg_name), "path")
+      if (is.null(loaded_path) || !nzchar(loaded_path)) NULL else normalizePath(loaded_path, mustWork = FALSE)
+    },
+    error = function(e) NULL
+  )
+}
+
 .loadfast.source_helpers <- function(abs_path, pkg_env, helpers, attach_testthat, pkg_name) {
   uses_testthat <- local({
     test_dirs <- c(
@@ -520,7 +570,7 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
 .loadfast.find_package_root <- function(path = ".") {
   current <- normalizePath(path, mustWork = TRUE)
 
-  if (!dir.exists(current)) {
+  if (file.exists(current) && !dir.exists(current)) {
     current <- dirname(current)
   }
 
@@ -528,7 +578,7 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
     if (file.exists(file.path(current, "DESCRIPTION")) &&
         file.exists(file.path(current, "NAMESPACE")) &&
         dir.exists(file.path(current, "R"))) {
-      return(current)
+      return(normalizePath(current, mustWork = TRUE))
     }
 
     parent <- dirname(current)
