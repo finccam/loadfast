@@ -1121,9 +1121,9 @@ check("multi-pkg: helpers disabled keeps test helper out of packageb env", quote
 ))
 
 # --------------------------------------------------------------------------
-# 3e2: cross-package function updates
+# 3e2: cross-package function() updates
 # --------------------------------------------------------------------------
-cat("\n--- 3e2: cross-package function updates ---\n\n")
+cat("\n--- 3e2: cross-package function() updates ---\n\n")
 
 tmp_dep_a <- tempfile("loadfast_dep_a_")
 tmp_dep_b <- tempfile("loadfast_dep_b_")
@@ -1166,6 +1166,222 @@ ns_dep_b_full <- load_fast(tmp_dep_b, helpers = FALSE, attach_testthat = FALSE, 
 
 check("cross-pkg: pkgb full reload has new imported foo", quote(
   get("bar", envir = ns_dep_b_full)() == "new"
+))
+
+# --------------------------------------------------------------------------
+# 3e3: inter-package importFrom() updates
+# --------------------------------------------------------------------------
+cat("\n--- 3e3: inter-package importFrom() updates ---\n\n")
+
+tmp_dep_from_a <- tempfile("loadfast_dep_from_a_")
+tmp_dep_from_b <- tempfile("loadfast_dep_from_b_")
+dir.create(file.path(tmp_dep_from_a, "R"), recursive = TRUE)
+dir.create(file.path(tmp_dep_from_b, "R"), recursive = TRUE)
+
+writeLines(c("Package: fromapkg", "Version: 1.0"), file.path(tmp_dep_from_a, "DESCRIPTION"))
+writeLines("export(foo)", file.path(tmp_dep_from_a, "NAMESPACE"))
+writeLines('foo <- function() "old_from"', file.path(tmp_dep_from_a, "R", "a.R"))
+
+writeLines(c("Package: frombpkg", "Version: 1.0", "Imports: fromapkg"), file.path(tmp_dep_from_b, "DESCRIPTION"))
+writeLines(c("importFrom(fromapkg, foo)", "export(bar)"), file.path(tmp_dep_from_b, "NAMESPACE"))
+writeLines("bar <- function() foo()", file.path(tmp_dep_from_b, "R", "b.R"))
+
+ns_dep_from_a <- load_fast(tmp_dep_from_a, helpers = FALSE, attach_testthat = FALSE)
+ns_dep_from_b <- load_fast(tmp_dep_from_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("inter-pkg-from: frombpkg calls initial importFrom function", quote(
+  get("bar", envir = ns_dep_from_b)() == "old_from"
+))
+
+writeLines('foo <- function() "new_from"', file.path(tmp_dep_from_a, "R", "a.R"))
+ns_dep_from_a <- load_fast(tmp_dep_from_a, helpers = FALSE, attach_testthat = FALSE)
+
+check("inter-pkg-from: fromapkg reload updates foo in fromapkg", quote(
+  get("foo", envir = ns_dep_from_a)() == "new_from"
+))
+
+check("inter-pkg-from: frombpkg automatically gets updated importFrom foo without reload", quote(
+  get("bar", envir = ns_dep_from_b)() == "new_from"
+))
+
+ns_dep_from_b_incr <- load_fast(tmp_dep_from_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("inter-pkg-from: frombpkg incr reload has new importFrom foo", quote(
+  get("bar", envir = ns_dep_from_b_incr)() == "new_from"
+))
+
+ns_dep_from_b_full <- load_fast(tmp_dep_from_b, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("inter-pkg-from: frombpkg full reload has new importFrom foo", quote(
+  get("bar", envir = ns_dep_from_b_full)() == "new_from"
+))
+
+# --------------------------------------------------------------------------
+# 3e4: inter-package dependency reload with attached env
+# --------------------------------------------------------------------------
+cat("\n--- 3e4: inter-package dependency reload with attached env ---\n\n")
+
+tmp_dep_full_a <- tempfile("loadfast_dep_full_a_")
+tmp_dep_full_b <- tempfile("loadfast_dep_full_b_")
+copy_baseline(tmp_dep_full_a)
+copy_baseline(tmp_dep_full_b)
+
+rename_package(tmp_dep_full_a, "depfullapkg")
+rename_package(tmp_dep_full_b, "depfullbpkg")
+
+replace_namespace_imports(
+  file.path(tmp_dep_full_b, "NAMESPACE"),
+  c(
+    "import(depfullapkg)",
+    "importFrom(rlang, ns_registry_env)",
+    "import(methods)",
+    "importFrom(R6, R6Class)",
+    "importFrom(data.table,\":=\")",
+    "importFrom(data.table,as.data.table)",
+    "importFrom(data.table,data.table)"
+  )
+)
+
+writeLines(c(
+  "compute_with_a <- function(a, b) {",
+  "  add(a, b) * 10",
+  "}",
+  "",
+  'depfullbpkg <- function() "depfullbpkg"'
+), file.path(tmp_dep_full_b, "R", "000_init.R"))
+
+ns_dep_full_a <- load_fast(tmp_dep_full_a, helpers = FALSE, attach_testthat = FALSE)
+ns_dep_full_b <- load_fast(tmp_dep_full_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("inter-pkg-full: packageb can call imported packagea::add()", quote(
+  get("compute_with_a", envir = ns_dep_full_b)(1, 2) == 30
+))
+
+check("inter-pkg-full: packageb attached env can call imported packagea::add()", quote(
+  get("compute_with_a", pos = "package:depfullbpkg")(2, 3) == 50
+))
+
+writeLines(c(
+  "add <- function(a, b) {",
+  "  a + b + 1000",
+  "}",
+  "",
+  "scale_vector <- function(x, factor = 1) {",
+  "  x * factor",
+  "}",
+  "",
+  "summarize_values <- function(x) {",
+  "  list(mean = mean(x), sd = sd(x), n = length(x))",
+  "}",
+  "",
+  "mutate_dt <- function(x, times = 2L) {",
+  "  dt <- as.data.table(list(val = x))",
+  "  dt[, scaled := val * times]",
+  "  dt",
+  "}"
+), file.path(tmp_dep_full_a, "R", "base.R"))
+
+ns_dep_full_a2 <- load_fast(tmp_dep_full_a, helpers = FALSE, attach_testthat = FALSE)
+
+check("inter-pkg-full: packagea reload updates add()", quote(
+  get("add", envir = ns_dep_full_a2)(1, 2) == 1003
+))
+
+check("inter-pkg-full: packageb automatically sees reloaded packagea behavior in namespace", quote(
+  get("compute_with_a", envir = ns_dep_full_b)(1, 2) == 10030
+))
+
+check("inter-pkg-full: packageb automatically sees reloaded packagea behavior in attached env", quote(
+  get("compute_with_a", pos = "package:depfullbpkg")(2, 3) == 10050
+))
+
+# --------------------------------------------------------------------------
+# 3e5: inter-package importFrom(packagea, add) reload with attached env
+# --------------------------------------------------------------------------
+cat("\n--- 3e5: inter-package importFrom(packagea, add) reload with attached env ---\n\n")
+
+tmp_dep_from_full_a <- tempfile("loadfast_dep_from_full_a_")
+tmp_dep_from_full_b <- tempfile("loadfast_dep_from_full_b_")
+copy_baseline(tmp_dep_from_full_a)
+copy_baseline(tmp_dep_from_full_b)
+
+rename_package(tmp_dep_from_full_a, "fromfullapkg")
+rename_package(tmp_dep_from_full_b, "fromfullbpkg")
+
+writeLines(c(
+  "export(add)",
+  "importFrom(rlang, ns_registry_env)",
+  "import(methods)",
+  "importFrom(R6, R6Class)",
+  "importFrom(data.table,\":=\")",
+  "importFrom(data.table,as.data.table)",
+  "importFrom(data.table,data.table)"
+), file.path(tmp_dep_from_full_a, "NAMESPACE"))
+
+replace_namespace_imports(
+  file.path(tmp_dep_from_full_b, "NAMESPACE"),
+  c(
+    "importFrom(fromfullapkg,add)",
+    "importFrom(rlang, ns_registry_env)",
+    "import(methods)",
+    "importFrom(R6, R6Class)",
+    "importFrom(data.table,\":=\")",
+    "importFrom(data.table,as.data.table)",
+    "importFrom(data.table,data.table)"
+  )
+)
+
+writeLines(c(
+  "compute_with_add <- function(a, b) {",
+  "  add(a, b) * 100",
+  "}",
+  "",
+  'fromfullbpkg <- function() "fromfullbpkg"'
+), file.path(tmp_dep_from_full_b, "R", "000_init.R"))
+
+ns_dep_from_full_a <- load_fast(tmp_dep_from_full_a, helpers = FALSE, attach_testthat = FALSE)
+ns_dep_from_full_b <- load_fast(tmp_dep_from_full_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("inter-pkg-from-full: packageb can call importFrom(packagea, add)", quote(
+  get("compute_with_add", envir = ns_dep_from_full_b)(1, 2) == 300
+))
+
+check("inter-pkg-from-full: packageb attached env can call importFrom(packagea, add)", quote(
+  get("compute_with_add", pos = "package:fromfullbpkg")(2, 3) == 500
+))
+
+writeLines(c(
+  "add <- function(a, b) {",
+  "  a + b + 10",
+  "}",
+  "",
+  "scale_vector <- function(x, factor = 1) {",
+  "  x * factor",
+  "}",
+  "",
+  "summarize_values <- function(x) {",
+  "  list(mean = mean(x), sd = sd(x), n = length(x))",
+  "}",
+  "",
+  "mutate_dt <- function(x, times = 2L) {",
+  "  dt <- as.data.table(list(val = x))",
+  "  dt[, scaled := val * times]",
+  "  dt",
+  "}"
+), file.path(tmp_dep_from_full_a, "R", "base.R"))
+
+ns_dep_from_full_a2 <- load_fast(tmp_dep_from_full_a, helpers = FALSE, attach_testthat = FALSE)
+
+check("inter-pkg-from-full: packagea reload updates add()", quote(
+  get("add", envir = ns_dep_from_full_a2)(1, 2) == 13
+))
+
+check("inter-pkg-from-full: packageb automatically sees new imported binding in namespace", quote(
+  get("compute_with_add", envir = ns_dep_from_full_b)(1, 2) == 1300
+))
+
+check("inter-pkg-from-full: packageb automatically sees new imported binding in attached env", quote(
+  get("compute_with_add", pos = "package:fromfullbpkg")(2, 3) == 1500
 ))
 
 # --------------------------------------------------------------------------

@@ -520,9 +520,17 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
     } else {
       next
     }
+    pkg_env_name <- paste0("package:", ns_name)
+    pkg_env <- if (pkg_env_name %in% search()) as.environment(pkg_env_name) else NULL
     for (s in syms) {
-      if (exists(s, envir = ns_env, inherits = FALSE) && !bindingIsLocked(s, impenv)) {
-        assign(s, get(s, envir = ns_env, inherits = FALSE), envir = impenv)
+      if (exists(s, envir = ns_env, inherits = FALSE)) {
+        val <- get(s, envir = ns_env, inherits = FALSE)
+        if (!bindingIsLocked(s, impenv)) {
+          assign(s, val, envir = impenv)
+        }
+        if (!is.null(pkg_env) && exists(s, envir = pkg_env, inherits = FALSE) && !bindingIsLocked(s, pkg_env)) {
+          assign(s, val, envir = pkg_env)
+        }
       }
     }
   }
