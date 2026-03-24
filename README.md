@@ -94,7 +94,8 @@ You can bind `loadfast::load_fast()` in the Zed keymap:
 ```json
 "ctrl-shift-l": [
   "workspace::SendKeystrokes",
-  "l o a d f a s t : : l o a d _ f a s t ( )"  # you to add a command to focus the terminal first
+  # note: you also need to add a command to focus the terminal first
+  "l o a d f a s t : : l o a d _ f a s t ( )" 
 ]
 ```
 
@@ -106,4 +107,12 @@ Run the full test suite with:
 
 ```sh
 Rscript test_loadfast.R
+```
+
+Run only matching checks by setting `LOADFAST_TEST_FILTER`. The value is treated as a regular expression matched against each check description.
+
+Example:
+
+```sh
+LOADFAST_TEST_FILTER="inter-pkg|dep-order" Rscript test_loadfast.R
 ```
