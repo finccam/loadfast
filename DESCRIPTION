@@ -13,7 +13,7 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Imports:
     rlang
-Suggests:
+DevDeps:
     testthat,
     R6,
     data.table
