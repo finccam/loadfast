@@ -1,33 +1,34 @@
 # loadfast
 
-Standalone, single-file replacement for `devtools::load_all()` with MD5-based incremental reloading. No runtime dependency on pkgload or devtools — just `rlang`.
+`loadfast` is an installable R package that aims to be a drop-in replacement for `devtools::load_all()` for large codebases, with MD5-based incremental reloading to speed up the edit-reload-test loop.
 
-The canonical source lives at `https://github.com/finccam-com/loadfast/`.
+`loadfast` is meant to improve the development loop for large packages, not to be a general replacement for all `devtools::load_all()` workflows. See [Important limitation: incremental reload does not clean up stale symbols](#important-limitation-incremental-reload-does-not-clean-up-stale-symbols) below for the main tradeoff.
 
-`loadfast.R` is intended to be copied and pasted into each repo that uses it. If you want to change the loader, make the change in this source repo first, then copy-paste the updated file into downstream repos.
+It does not depend on `pkgload` or `devtools` at runtime. The main runtime dependency is `rlang`.
 
-## Recommended setup
+## Installation
 
-1. Copy-paste `loadfast.R` into the root of the repo where you want to use it.
-
-2. Add this guard to `.Rprofile` so `loadfast` is opt-in:
+Install from GitHub with either `pak` or `remotes`:
 
 ```r
-if (identical(Sys.getenv("FINCCAM_LOADFAST_ENABLED"), "true")) {
-  source("loadfast.R")
-}
+pak::pkg_install("finccam/loadfast")
+# or
+remotes::install_github("finccam/loadfast")
 ```
 
 ## Usage
 
+Call `load_fast()` on a package root:
+
 ```r
-source("loadfast.R")
-load_fast("path/to/your/package")
+loadfast::load_fast()
+# or
+loadfast::load_fast("path/to/your/package")
 ```
 
 `load_fast()` reads the package name from `DESCRIPTION`, builds a proper namespace (so S4 and R6 work), processes `NAMESPACE` imports, sources `R/*.R`, attaches the package to the search path, and optionally sources testthat helpers.
 
-On the first call for a given package path it does a full teardown+rebuild. On subsequent calls for that same path it re-sources only files whose MD5 hash changed.
+It is designed for the common development workflow where you repeatedly edit source files and reload the same package. On the first call for a given package path it does a full teardown+rebuild. On subsequent calls for that same path it re-sources only files whose MD5 hash changed.
 
 `load_fast()` also accepts:
 
@@ -40,7 +41,7 @@ If runtime code needs a specific file to be re-sourced on the next load, call `l
 
 If `renv.lock` changes between incremental loads for the same package path, `load_fast()` warns. Dependency changes may require restarting R or reinstalling packages.
 
-Re-sourcing `loadfast.R` itself resets the in-memory loader state, so the next `load_fast()` call will be a full load.
+Reloading the `loadfast` package itself resets the in-memory loader state, so the next `load_fast()` call will be a full load.
 
 ## Important limitation: incremental reload does not clean up stale symbols
 
@@ -55,9 +56,15 @@ This means that after an incremental reload:
 
 Pass `full = TRUE` to force a complete teardown+rebuild. You should do this after deleting files, removing functions, or whenever you need a clean namespace state.
 
+## RStudio addin
+
+`loadfast` can expose an RStudio addin so you can bind `load_fast()` to a keyboard shortcut in the IDE once the package is installed.
+
 ## Tests
 
-Run all tests:
+The repo currently keeps its own custom test harness.
+
+Run all tests with:
 
 ```sh
 Rscript test_loadfast.R

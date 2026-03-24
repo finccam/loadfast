@@ -1,0 +1,4 @@
+Name: Load fast
+Description: Reload the current project/package with load_fast().
+Binding: load_fast
+Interactive: true

@@ -1,21 +1,32 @@
-# Standalone replacement for devtools::load_all() with MD5-based incremental
-# reloading. On first call does a full teardown+rebuild; on subsequent calls
-# for the same path re-sources only files whose MD5 hash changed.
-# Source of truth lives at https://github.com/finccam-com/loadfast/
-# This file is intended to be copied into every repo that uses it.
-# Make changes in that upstream repo, then copy the updated file down.
-# Requires: rlang (for namespace registry access)
-# Usage: source("loadfast.R"); load_fast()
-
 message("Incremental reload is available via load_fast().")
 
 .loadfast.cache <- new.env(parent = emptyenv())
-.loadfast_loading <- FALSE
+.loadfast.state <- new.env(parent = emptyenv())
+.loadfast.state$loading <- FALSE
 
+#' Load a package from source with MD5-based incremental reloading
+#'
+#' `load_fast()` is a lightweight alternative to `devtools::load_all()`.
+#' On the first call for a package path it performs a full teardown and rebuild.
+#' On subsequent calls for that same path it re-sources only `R/` files whose
+#' MD5 hashes changed.
+#'
+#' @param path Path to a package root containing `DESCRIPTION`, `NAMESPACE`,
+#'   and `R/`. If `path` points inside a package, `load_fast()` walks upward to
+#'   the package root.
+#' @param helpers If `TRUE`, source `tests/testthat/helper*.R` when testthat is
+#'   available.
+#' @param attach_testthat If `NULL`, auto-detect whether `testthat` should be
+#'   attached. If `TRUE`, attach `testthat`.
+#' @param full If `TRUE`, force a complete teardown and rebuild.
+#' @param verbose If `TRUE`, emit per-phase timing logs.
+#'
+#' @return Invisibly returns the namespace environment.
+#' @export
 load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full = FALSE, verbose = FALSE) {
-  if (.loadfast_loading) stop("load_fast() re-entrance detected — a sourced file is calling load_fast()")
-  .loadfast_loading <<- TRUE
-  on.exit(.loadfast_loading <<- FALSE, add = TRUE)
+  if (.loadfast.state$loading) stop("load_fast() re-entrance detected — a sourced file is calling load_fast()")
+  .loadfast.state$loading <- TRUE
+  on.exit(.loadfast.state$loading <- FALSE, add = TRUE)
 
   if (verbose) {
     .t0 <- proc.time()["elapsed"]
@@ -29,7 +40,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     .timer <- function(label) invisible(NULL)
   }
 
-  abs_path <- normalizePath(path, mustWork = TRUE)
+  abs_path <- .loadfast.find_package_root(path)
   path_display <- if (identical(path, ".")) {
     basename(abs_path)
   } else if (grepl("^(?:[A-Za-z]:[/\\\\]|[/\\\\])", path)) {
@@ -375,6 +386,15 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   invisible(ns_env)
 }
 
+#' Register one or more files for reload on the next `load_fast()` call
+#'
+#' @param path Package root path.
+#' @param files File paths to reload on the next call.
+#' @param reason Optional human-readable reason shown in messages.
+#'
+#' @return Invisibly returns `TRUE` when a reload was registered and `FALSE`
+#'   when there is no active cache for the package path.
+#' @export
 load_fast_register_reload <- function(path = ".", files, reason = NULL) {
   if (missing(files) || length(files) == 0L) stop("'files' must contain at least one path")
 
@@ -494,5 +514,27 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
       if (is.na(old_not_cran)) Sys.unsetenv("NOT_CRAN") else Sys.setenv(NOT_CRAN = old_not_cran)
     }, add = TRUE)
     testthat::source_test_helpers(test_dir, env = pkg_env)
+  }
+}
+
+.loadfast.find_package_root <- function(path = ".") {
+  current <- normalizePath(path, mustWork = TRUE)
+
+  if (!dir.exists(current)) {
+    current <- dirname(current)
+  }
+
+  repeat {
+    if (file.exists(file.path(current, "DESCRIPTION")) &&
+        file.exists(file.path(current, "NAMESPACE")) &&
+        dir.exists(file.path(current, "R"))) {
+      return(current)
+    }
+
+    parent <- dirname(current)
+    if (identical(parent, current)) {
+      stop("Could not find package root from path: ", path, call. = FALSE)
+    }
+    current <- parent
   }
 }

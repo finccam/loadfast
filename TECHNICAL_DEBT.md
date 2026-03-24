@@ -1,10 +1,10 @@
 # Technical debt
 
-This document tracks known implementation debt and conscious tradeoffs in `loadfast.R`. It is intentionally short and action-oriented. The goal is to preserve context for future edits without restating the whole implementation.
+This document tracks known implementation debt and conscious tradeoffs in the `loadfast` package implementation under `R/`. It is intentionally short and action-oriented. The goal is to preserve context for future edits without restating the whole implementation.
 
 ## Current status
 
-- `loadfast.R` passes the current repo test suite.
+- The package implementation under `R/` passes the current repo test suite.
 - The loader design is broadly sound for the target use case.
 - Most debt is in edge-case correctness and maintainability rather than basic functionality.
 
@@ -55,7 +55,7 @@ Logic for detecting testthat usage and helper sourcing is repeated in multiple p
 
 **Risk**
 - Small drift between code paths
-- Unnecessary repetition in a file intended to stay copy-paste friendly
+- Unnecessary repetition in package source that now lives in one canonical implementation file
 
 **Preferred fix**
 - Extract a small helper for detecting whether testthat helpers should be considered available
@@ -97,7 +97,7 @@ This is intentional and tested. It favors making dependency drift obvious over s
 ### 3. `Collate` support is intentionally narrow
 The loader now respects the `Collate` field from `DESCRIPTION` when ordering `R/*.R` files, and this behavior is covered by the test suite.
 
-This is still intentionally lightweight rather than a full reproduction of every package-loading edge case. Future changes should preserve the current `Collate` behavior without overcomplicating the single-file design.
+This is still intentionally lightweight rather than a full reproduction of every package-loading edge case. Future changes should preserve the current `Collate` behavior without overcomplicating the package implementation.
 
 **Current rule**
 - Treat `Collate` ordering for `R/*.R` as supported behavior
@@ -113,4 +113,4 @@ This is still intentionally lightweight rather than a full reproduction of every
 
 - Most of the implementation complexity is justified by R namespace machinery, especially S4 behavior and imports metadata shape.
 - The current code is more "pragmatic systems R" than elegant, which is appropriate here.
-- Avoid refactoring for style alone unless it clearly improves correctness or preserves the copy-paste single-file design.
+- Avoid refactoring for style alone unless it clearly improves correctness, installability, or package ergonomics.

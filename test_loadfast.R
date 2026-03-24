@@ -1,4 +1,5 @@
-source("loadfast.R")
+# Load package source directly from `R/` for the custom repo test harness.
+source(file.path("R", "loadfast.R"))
 
 passed <- 0L
 failed <- 0L

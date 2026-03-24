@@ -1,0 +1,18 @@
+Package: loadfast
+Title: Fast Incremental Package Loader for Interactive Development
+Version: 0.0.1
+Authors@R: person(given = "Finccam", family = "Team", email = "engineering@finccam.com", role = c("aut", "cre"))
+Description: Provides a fast replacement for development-time package loading
+    with MD5-based incremental reloading, proper namespace construction, and
+    support for testthat helpers.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Imports:
+    rlang
+Suggests:
+    testthat,
+    rstudioapi,
+    R6,
+    data.table

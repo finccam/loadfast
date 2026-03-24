@@ -11,10 +11,10 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 
 ## Project layout
 
-- This repo **is** the source-of-truth edit target for `loadfast`. If you are changing loader behavior, docs, or tests for `loadfast`, make the change here. Downstream repos should copy-paste `loadfast.R` from this repo rather than maintain divergent local edits.
-- **`loadfast.R`** (top-level) is the standalone replacement for `devtools::load_all()` with MD5-based incremental reloading. On first call does a full teardown+rebuild; on subsequent calls for the same path re-sources only files whose MD5 hash changed. The canonical upstream source lives at `https://github.com/finccam-com/loadfast/`. This file is intended to be copy-pasted into every repo that uses it. See "Incremental loader" section below.
-- **`run_tests.R`** — unified test suite implementation containing all stages for `loadfast.R`. It is sourced by the top-level runner so the actual entrypoint stays `test_loadfast.R`.
-- **`test_loadfast.R`** — top-level test runner: sources `loadfast.R`, then sources `run_tests.R`. Keep this as the single command users run.
+- This repo **is** the source-of-truth edit target for the `loadfast` package. If you are changing loader behavior, docs, or tests for `loadfast`, make the change here.
+- **`R/loadfast.R`** contains the canonical loader implementation exported by the package. It provides MD5-based incremental reloading: on first call it does a full teardown+rebuild; on subsequent calls for the same path it re-sources only files whose MD5 hash changed. See "Incremental loader" section below.
+- **`DESCRIPTION`**, **`NAMESPACE`**, and **`inst/rstudio/addins.dcf`** define the installable package and its RStudio addin registration.
+- **`test_loadfast.R`** is the top-level custom test runner. Keep this as the single command users run.
 - **`devpackage/`** is the single frozen baseline package snapshot used by the tests. Contains `DESCRIPTION`, `NAMESPACE`, `R/` (source files), and `tests/testthat/` (testthat tests + helpers). Package name is `devpackage`. All code mutations for reload/incremental testing are applied ad-hoc to temp copies at test time.
   - `R/base.R` — plain functions (`add`, `scale_vector`, `summarize_values`, `mutate_dt`) — `mutate_dt` exercises `data.table`'s `:=` and `as.data.table` via `importFrom`
   - `R/s4_classes.R` — S4 classes (`Animal`, `Pet`), generics, methods
@@ -36,7 +36,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - **`full = FALSE`** (default): allows incremental reloads. Pass `full = TRUE` to force a complete teardown+rebuild, which is needed to clean up symbols from deleted files or removed functions.
 - **`verbose = FALSE`** (default): pass `verbose = TRUE` to emit per-phase timing logs (e.g. `[load_fast] source 475 files  7.210s (cumul 7.510s)`). Useful for diagnosing performance.
 
-## Incremental loader (loadfast.R)
+## Incremental loader (`R/loadfast.R`)
 
 - **`.loadfast.cache`** is a module-level environment (`parent = emptyenv()`) keyed by `normalizePath(path)`. Each entry currently stores the namespace env, file hashes, `renv.lock` hash baseline, any registered reload files, and the pending reload message to emit on the next load.
 - **Change detection**: `tools::md5sum()` on all `R/*.R` files every call. Compared against cached hashes to classify files as changed or added.
@@ -44,7 +44,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - **Package env sync**: after incremental re-sourcing, all symbols from `ns_env` are bulk-copied to the `package:pkg` environment (one `ls()` call total).
 - **Testthat helpers**: always re-sourced on every call (simple approach — there are usually only 1-2 helper files).
 - **Explicit file reload registration**: runtime code can register one or more files to be reloaded on the next `load_fast()` call. In user-facing docs and messages, describe this as registering or applying a reload, not as cache invalidation.
-- **Re-sourcing `loadfast.R` itself** recreates `.loadfast.cache`, losing all cached state. Next `load_fast()` call will do a full load. This is intentional.
+- **Reloading the `loadfast` package code** recreates `.loadfast.cache`, losing all cached state. The next `load_fast()` call will do a full load. This is intentional during development.
 - **`full = TRUE`** bypasses the cache lookup, forcing a full teardown+rebuild. Use this after deleting files or removing functions.
 
 ## Testing gotchas
@@ -61,7 +61,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
     - 3c: `make_animal()` in `wrappers.R` calls `new("Animal",...)` — add `age` slot to the class in `s4_classes.R`, verify the unchanged constructor returns an object with the new slot.
     - 3d: add a `Collate` field plus deliberately misordered filenames, then verify the loader respects `Collate` ordering rather than plain alphabetical order.
   - **Stage 4**: Copy `devpackage/` to a third temp dir, test incremental-specific behaviors: no-change short-circuit, function removal (stale symbols linger), function addition, function modification, new file, file deletion, explicit file reload registration, failed incremental reload recovery, runtime S4 method patch reload registration, and persistent `renv.lock` change warnings. Verifies that `full = TRUE` properly cleans up stale symbols.
-- Stage 2 always triggers a full load (different path from Stage 1 = cache miss). Stage 3 exercises the incremental path for `loadfast.R` on a stable temp path while mutating files in place.
+- Stage 2 always triggers a full load (different path from Stage 1 = cache miss). Stage 3 exercises the incremental path for `load_fast()` on a stable temp path while mutating files in place.
 
 ## R namespace machinery gotchas
 
@@ -74,7 +74,7 @@ S4's `setClass`/`setMethod` rely on `topenv()` and `isNamespace()` internally. A
 R's `registerNamespace` is an `.Internal` and cannot be called from user code. The workaround is `rlang::ns_registry_env()` which returns the registry as an R environment — you can assign directly into it: `reg[[pkg_name]] <- ns_env`.
 
 ### `makeNamespace` is not exported
-`makeNamespace` is a **local function defined inside `base::loadNamespace`**. It is not accessible directly. pkgload extracts it at load time via AST manipulation (`extract_lang` + `modify_lang`). In `loadfast.R` and `loadfast_v1.R` we instead replicate its logic inline.
+`makeNamespace` is a **local function defined inside `base::loadNamespace`**. It is not accessible directly. pkgload extracts it at load time via AST manipulation (`extract_lang` + `modify_lang`). In `R/loadfast.R` we instead replicate its logic inline.
 
 ### S4 "no definition for class" is a `message()`, not a `warning()`
 On R 4.2.2 (and possibly other versions), `methods:::matchSignature` emits the "no definition for class" notice via `message()`, **not** `warning()`. This means `suppressWarnings()` does NOT suppress it — you need `suppressMessages()` or a `withCallingHandlers` that catches **both** `warning` and `message` conditions. This was discovered empirically; the decompiled source appears to show `warning()` but the runtime behavior is `message()`.
@@ -82,7 +82,7 @@ On R 4.2.2 (and possibly other versions), `methods:::matchSignature` emits the "
 These notices are **harmless**. They can still appear when `setMethod()` is sourced before the corresponding `setClass()` because of file ordering. The methods still register correctly. Installed packages never hit this because they load from pre-compiled lazy-load databases (no re-execution of `setClass`/`setMethod`).
 
 ### S4 class redefinition on reload requires full unregister
-When reloading a package that redefines an S4 class (e.g. adding a slot), the old class definition must be fully evicted first. This works in `loadfast.R` because the reload path calls `unloadNamespace()` (or force-removes from the registry), which clears the methods package's internal class cache. Without this, `setClass()` would see the old definition and the new slot would silently fail to appear.
+When reloading a package that redefines an S4 class (e.g. adding a slot), the old class definition must be fully evicted first. This works in `R/loadfast.R` because the reload path calls `unloadNamespace()` (or force-removes from the registry), which clears the methods package's internal class cache. Without this, `setClass()` would see the old definition and the new slot would silently fail to appear.
 
 ### `parseNamespaceFile` path convention
 `parseNamespaceFile(package, package.lib)` constructs the path as `<package.lib>/<package>/NAMESPACE`. So to parse `./NAMESPACE` you must call:
