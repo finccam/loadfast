@@ -3,6 +3,7 @@ message("Incremental reload is available via load_fast().")
 .loadfast.cache <- new.env(parent = emptyenv())
 .loadfast.state <- new.env(parent = emptyenv())
 .loadfast.state$loading <- FALSE
+.loadfast.state$active_paths <- new.env(parent = emptyenv())
 
 #' Load a package from source with MD5-based incremental reloading
 #'
@@ -97,9 +98,17 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     cached <- .loadfast.cache[[abs_path]]
   }
 
+  active_path <- if (exists(pkg_name, envir = .loadfast.state$active_paths, inherits = FALSE)) {
+    .loadfast.state$active_paths[[pkg_name]]
+  } else {
+    NULL
+  }
+
   can_incremental <- !is.null(cached) &&
     pkg_name %in% loadedNamespaces() &&
-    pkg_env_name %in% search()
+    pkg_env_name %in% search() &&
+    is.character(active_path) &&
+    identical(active_path, abs_path)
 
   if (can_incremental) {
     ns_env <- cached$ns_env
@@ -157,6 +166,10 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     for (f in files_to_source) {
       .loadfast.source_one(f, ns_env)
     }
+    ns_env$.packageName <- pkg_name
+    if (isNamespaceLoaded("methods")) {
+      methods::setPackageName(pkg_name, ns_env)
+    }
     .timer(paste0("incr source ", length(files_to_source), " files"))
 
     list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
@@ -205,6 +218,19 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   }
 
   # ---- FULL LOAD ----
+
+  prior_active_path <- if (exists(pkg_name, envir = .loadfast.state$active_paths, inherits = FALSE)) {
+    .loadfast.state$active_paths[[pkg_name]]
+  } else {
+    NULL
+  }
+  if (!is.null(prior_active_path) && !identical(prior_active_path, abs_path)) {
+    warning(
+      "Package '", pkg_name, "' is already loaded from a different path: ", prior_active_path,
+      ". Reloading from ", abs_path, " will replace the existing loaded package.",
+      call. = FALSE
+    )
+  }
 
   if (pkg_env_name %in% search()) {
     detach(pkg_env_name, character.only = TRUE, unload = FALSE, force = TRUE)
@@ -380,6 +406,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     registered_reload_files = character(0),
     pending_reload_message = NULL
   )
+  .loadfast.state$active_paths[[pkg_name]] <- abs_path
 
   message("Load ", length(r_files), " file(s) from ", r_dir_display, ".")
   .timer("TOTAL (full load)")
