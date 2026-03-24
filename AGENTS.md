@@ -23,7 +23,7 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
   - `tests/testthat/test-base.R` — testthat tests exercising all of the above
 - **`renv/`** and **`renv.lock`** manage the project-local library. Key packages: `testthat`, `R6`, `rlang`, `data.table`.
 - **`TECHNICAL_DEBT.md`** tracks known loader tradeoffs, risks, and cleanup opportunities. Update it when you identify a non-trivial issue that is worth preserving across sessions. Use reload-registration terminology in docs and guidance rather than cache-invalidation terminology when describing the user-facing behavior.
-- **`pkgload/`** contains the original pkgload R package source code (moved here for reference). It is NOT used at runtime.
+- **`pkgload/`** and **`devtools`** contains the original pkgload & devtools R package source code (moved here for reference). It is NOT used at runtime (and gitignored). Can be initally cloned with `just setup`.
 
 ## Shared design decisions
 
