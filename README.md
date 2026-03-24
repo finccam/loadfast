@@ -1,10 +1,12 @@
 # loadfast
 
-`loadfast` is an installable R package that aims to be a drop-in replacement for `devtools::load_all()` for large codebases, with MD5-based incremental reloading to speed up the edit-reload-test loop.
+`loadfast` is an R package for interactive development on large R packages. It is intended as a drop-in replacement for `devtools::load_all()` when reload time is a bottleneck.
 
-`loadfast` is meant to improve the development loop for large packages, not to be a general replacement for all `devtools::load_all()` workflows. See [Important limitation: incremental reload does not clean up stale symbols](#important-limitation-incremental-reload-does-not-clean-up-stale-symbols) below for the main tradeoff.
+For a given package path, `loadfast` performs a full load on the first call, then uses MD5-based change detection to re-source only changed `R/` files on subsequent calls.
 
-It does not depend on `pkgload` or `devtools` at runtime. The main runtime dependency is `rlang`.
+`loadfast` is intended for the edit-reload-test loop, not as a general replacement `devtools::load_all()` . The main tradeoff is described in [Important limitation: incremental reload does not clean up stale symbols](#important-limitation-incremental-reload-does-not-clean-up-stale-symbols).
+
+At runtime, `loadfast` does not depend on `pkgload` or `devtools`. Its main runtime dependency is `rlang`.
 
 ## Installation
 
@@ -18,7 +20,7 @@ remotes::install_github("finccam/loadfast")
 
 ## Usage
 
-Call `load_fast()` on a package root:
+Call `load_fast()` from a package root or from any path inside a package:
 
 ```r
 loadfast::load_fast()
@@ -26,22 +28,24 @@ loadfast::load_fast()
 loadfast::load_fast("path/to/your/package")
 ```
 
-`load_fast()` reads the package name from `DESCRIPTION`, builds a proper namespace (so S4 and R6 work), processes `NAMESPACE` imports, sources `R/*.R`, attaches the package to the search path, and optionally sources testthat helpers.
+`load_fast()` reads the package name from `DESCRIPTION`, builds a namespace, processes `NAMESPACE` imports, sources `R/` files, attaches the package to the search path, and optionally sources testthat helpers.
 
-It is designed for the common development workflow where you repeatedly edit source files and reload the same package. On the first call for a given package path it does a full teardown+rebuild. On subsequent calls for that same path it re-sources only files whose MD5 hash changed.
+It supports packages that rely on standard R namespace behavior, including imports, S4 classes, and R6 classes.
 
-`load_fast()` also accepts:
+### Options
+
+`load_fast()` supports the following arguments:
 
 - `helpers = TRUE` to source `helper*.R` files from `tests/testthat/` when testthat is available
 - `attach_testthat = NULL` to auto-detect whether `testthat` should be attached
-- `full = TRUE` to force a complete teardown+rebuild
+- `full = TRUE` to force a complete teardown and rebuild
 - `verbose = TRUE` to emit per-phase timing logs
 
-If runtime code needs a specific file to be re-sourced on the next load, call `load_fast_register_reload()` to register that file for reload. This is useful for cases like runtime patching or temporary method overrides.
+If runtime code needs a specific file to be re-sourced on the next load, call `load_fast_register_reload()` to register that file for reload. This is useful for runtime patching and temporary method overrides.
 
 If `renv.lock` changes between incremental loads for the same package path, `load_fast()` warns. Dependency changes may require restarting R or reinstalling packages.
 
-Reloading the `loadfast` package itself resets the in-memory loader state, so the next `load_fast()` call will be a full load.
+Reloading the `loadfast` package resets the in-memory loader state, so the next `load_fast()` call for a package path performs a full load.
 
 ## Important limitation: incremental reload does not clean up stale symbols
 
@@ -58,13 +62,13 @@ Pass `full = TRUE` to force a complete teardown+rebuild. You should do this afte
 
 ## RStudio addin
 
-`loadfast` can expose an RStudio addin so you can bind `load_fast()` to a keyboard shortcut in the IDE once the package is installed.
+`loadfast` includes an RStudio addin that can be bound to a keyboard shortcut.
 
-## Tests
+## Testing
 
-The repo currently keeps its own custom test harness.
+This repository uses a custom test harness.
 
-Run all tests with:
+Run the full test suite with:
 
 ```sh
 Rscript test_loadfast.R
