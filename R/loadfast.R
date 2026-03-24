@@ -173,6 +173,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       )
       message("No changes in ", r_dir_display, ".")
       .loadfast.source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
+      .loadfast.update_downstream_imports(pkg_name, ns_env)
       .timer("TOTAL (no-change)")
       return(invisible(ns_env))
     }
@@ -228,6 +229,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     )
 
     .loadfast.source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
+    .loadfast.update_downstream_imports(pkg_name, ns_env)
     .timer("TOTAL (incremental)")
     return(invisible(ns_env))
   }
@@ -421,6 +423,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   )
 
   message("Load ", length(r_files), " file(s) from ", r_dir_display, ".")
+  .loadfast.update_downstream_imports(pkg_name, ns_env)
   .timer("TOTAL (full load)")
   invisible(ns_env)
 }
@@ -497,6 +500,32 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
 
   message(registration_message)
   invisible(TRUE)
+}
+
+.loadfast.update_downstream_imports <- function(pkg_name, ns_env) {
+  exports <- tryCatch(getNamespaceExports(ns_env), error = function(e) character(0))
+  for (ns_name in loadedNamespaces()) {
+    if (ns_name == pkg_name) next
+    ns <- asNamespace(ns_name)
+    impenv <- parent.env(ns)
+    if (environmentIsLocked(impenv)) next
+    imports <- tryCatch(getNamespaceInfo(ns, "imports"), error = function(e) NULL)
+    if (is.null(imports)) next
+    imp_info <- imports[[pkg_name]]
+    if (is.null(imp_info)) next
+    if (isTRUE(imp_info)) {
+      syms <- exports
+    } else if (is.character(imp_info)) {
+      syms <- imp_info
+    } else {
+      next
+    }
+    for (s in syms) {
+      if (exists(s, envir = ns_env, inherits = FALSE) && !bindingIsLocked(s, impenv)) {
+        assign(s, get(s, envir = ns_env, inherits = FALSE), envir = impenv)
+      }
+    }
+  }
 }
 
 .loadfast.source_one <- function(f, ns_env) {

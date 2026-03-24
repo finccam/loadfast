@@ -1121,6 +1121,54 @@ check("multi-pkg: helpers disabled keeps test helper out of packageb env", quote
 ))
 
 # --------------------------------------------------------------------------
+# 3e2: cross-package function updates
+# --------------------------------------------------------------------------
+cat("\n--- 3e2: cross-package function updates ---\n\n")
+
+tmp_dep_a <- tempfile("loadfast_dep_a_")
+tmp_dep_b <- tempfile("loadfast_dep_b_")
+dir.create(file.path(tmp_dep_a, "R"), recursive = TRUE)
+dir.create(file.path(tmp_dep_b, "R"), recursive = TRUE)
+
+writeLines(c("Package: pkga", "Version: 1.0"), file.path(tmp_dep_a, "DESCRIPTION"))
+writeLines("export(foo)", file.path(tmp_dep_a, "NAMESPACE"))
+writeLines('foo <- function() "old"', file.path(tmp_dep_a, "R", "a.R"))
+
+writeLines(c("Package: pkgb", "Version: 1.0", "Imports: pkga"), file.path(tmp_dep_b, "DESCRIPTION"))
+writeLines(c("import(pkga)", "export(bar)"), file.path(tmp_dep_b, "NAMESPACE"))
+writeLines("bar <- function() foo()", file.path(tmp_dep_b, "R", "b.R"))
+
+ns_dep_a <- load_fast(tmp_dep_a, helpers = FALSE, attach_testthat = FALSE)
+ns_dep_b <- load_fast(tmp_dep_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("cross-pkg: pkgb calls initial pkga function", quote(
+  get("bar", envir = ns_dep_b)() == "old"
+))
+
+writeLines('foo <- function() "new"', file.path(tmp_dep_a, "R", "a.R"))
+ns_dep_a <- load_fast(tmp_dep_a, helpers = FALSE, attach_testthat = FALSE)
+
+check("cross-pkg: pkga reload updates foo in pkga", quote(
+  get("foo", envir = ns_dep_a)() == "new"
+))
+
+check("cross-pkg: pkgb automatically gets updated imported foo without reload", quote(
+  get("bar", envir = ns_dep_b)() == "new"
+))
+
+ns_dep_b_incr <- load_fast(tmp_dep_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("cross-pkg: pkgb incr reload has new imported foo", quote(
+  get("bar", envir = ns_dep_b_incr)() == "new"
+))
+
+ns_dep_b_full <- load_fast(tmp_dep_b, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+check("cross-pkg: pkgb full reload has new imported foo", quote(
+  get("bar", envir = ns_dep_b_full)() == "new"
+))
+
+# --------------------------------------------------------------------------
 # 3f: Same package name from different path warns and replaces prior load
 # --------------------------------------------------------------------------
 cat("\n--- 3f: same package name from different path warns ---\n\n")
