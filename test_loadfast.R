@@ -169,6 +169,14 @@ check("isNamespace() returns TRUE", quote(
   isNamespace(ns)
 ))
 
+check("lazydata env exists in namespace info", quote(
+  is.environment(ns[[".__NAMESPACE__."]][["lazydata"]])
+))
+
+check("lazydata env is named correctly", quote(
+  attr(ns[[".__NAMESPACE__."]][["lazydata"]], "name") == "lazydata:devpackage"
+))
+
 # --- Search path ---
 check("package:devpackage is on the search path", quote(
   "package:devpackage" %in% search()
@@ -1152,6 +1160,22 @@ check("same-name: second path is now the active namespace path", quote(
     normalizePath(tmp_same_b, mustWork = FALSE)
   )
 ))
+
+# --------------------------------------------------------------------------
+# 3f2: base::attachNamespace compatibility
+# --------------------------------------------------------------------------
+cat("\n--- 3f2: base::attachNamespace compatibility ---\n\n")
+
+tmp_attach <- tempfile("loadfast_attach_")
+copy_baseline(tmp_attach)
+rename_package(tmp_attach, "pkgattach")
+ns_attach <- load_fast(tmp_attach, helpers = FALSE, attach_testthat = FALSE)
+
+check("base::attachNamespace does not fail due to missing lazydata env", quote({
+  detach("package:pkgattach", unload = FALSE)
+  base::attachNamespace(ns_attach)
+  "package:pkgattach" %in% search()
+}))
 
 # --------------------------------------------------------------------------
 # 3g: Same-name different-path cache flip-flop and renv.lock path scoping
