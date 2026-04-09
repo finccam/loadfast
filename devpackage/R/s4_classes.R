@@ -46,3 +46,10 @@ animal <- function(name, species, legs) {
 pet <- function(name, species, legs, owner) {
   new("Pet", name = name, species = species, legs = legs, owner = owner)
 }
+
+# --- Class: Basket (for testing setMethod on an imported S3 generic) ---
+setClass("Basket", representation(contents = "character"))
+
+setMethod("as.data.table", "Basket", function(x, keep.rownames = FALSE, ...) {
+  data.table(item = x@contents)
+})

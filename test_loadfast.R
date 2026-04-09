@@ -441,6 +441,38 @@ check("testthat devpackage: all tests pass", quote(
 
 cat(sprintf("  (testthat devpackage: %d passed, %d failed)\n", n_tt_pass1, n_tt_fail1))
 
+# --- S4 method on imported S3 generic (as.data.table) ---
+b1 <- new("Basket", contents = c("apple", "pear"))
+
+check("Basket class is defined", quote(
+  isClass("Basket")
+))
+
+check("as.data.table implicit generic is in ns_env (not just the imported S3 fn)", quote(
+  is(get("as.data.table", envir = ns, inherits = FALSE), "genericFunction")
+))
+
+check("as.data.table in pkg_env is the implicit generic (not overwritten by impenv)", quote(
+  is(get("as.data.table", pos = "package:devpackage", inherits = FALSE), "genericFunction")
+))
+
+check("as.data.table(Basket) dispatches correctly from ns_env", quote({
+  f <- get("as.data.table", envir = ns)
+  dt <- f(b1)
+  data.table::is.data.table(dt) && identical(dt$item, c("apple", "pear"))
+}))
+
+check("as.data.table(Basket) dispatches correctly via search path", quote({
+  f <- get("as.data.table", pos = "package:devpackage")
+  dt <- f(b1)
+  data.table::is.data.table(dt) && identical(dt$item, c("apple", "pear"))
+}))
+
+check("exportMethods: as.data.table is in namespace exports", quote(
+  "as.data.table" %in% getNamespaceExports("devpackage")
+))
+
+
 # ============================================================================
 # STAGE 2: Full reload with mutated code (project2-style changes, ad-hoc)
 # ============================================================================
@@ -1468,6 +1500,13 @@ check("remove-fn: R6 classes unaffected", quote(
   exists("Logger", envir = ns4b, inherits = FALSE) &&
     exists("Counter", envir = ns4b, inherits = FALSE)
 ))
+
+check("incr-reload: Basket method still works via pkg_env after base.R changed", quote({
+  b_incr <- new("Basket", contents = c("x", "y"))
+  f <- get("as.data.table", pos = pkg_env4)
+  dt <- f(b_incr)
+  data.table::is.data.table(dt) && identical(dt$item, c("x", "y"))
+}))
 
 ns4b_full <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
 
