@@ -462,8 +462,8 @@ check("as.data.table in pkg_env is the implicit generic (not overwritten by impe
   is(get("as.data.table", pos = "package:devpackage", inherits = FALSE), "genericFunction")
 ))
 
-check("exportMethods: as.data.table is in namespace exports", quote(
-  "as.data.table" %in% getNamespaceExports("devpackage")
+check("as.data.table not in namespace exports (no exportMethods directive)", quote(
+  !"as.data.table" %in% getNamespaceExports("devpackage")
 ))
 
 check("as.data.table(Basket) dispatches correctly from ns_env", quote({
@@ -478,8 +478,8 @@ check("as.data.table(Basket) dispatches correctly via search path", quote({
   data.table::is.data.table(dt) && identical(dt$item, c("apple", "pear"))
 }))
 
-check("as.data.table(Basket) direct call via getExportedValue", quote({
-  dt <- getExportedValue("devpackage", "as.data.table")(b1)
+check("as.data.table(Basket) direct call via pkg_env", quote({
+  dt <- get("as.data.table", pos = "package:devpackage")(b1)
   data.table::is.data.table(dt) && identical(dt$item, c("apple", "pear"))
 }))
 
@@ -489,12 +489,12 @@ check("as.data.table(Basket) direct call evaluated in pkg_env scope", quote({
 }))
 
 check("as.data.table(Basket) single-element Basket", quote({
-  dt <- getExportedValue("devpackage", "as.data.table")(b1_single)
+  dt <- get("as.data.table", pos = "package:devpackage")(b1_single)
   data.table::is.data.table(dt) && nrow(dt) == 1L && identical(dt$item, "only")
 }))
 
 check("as.data.table(Basket) empty Basket yields 0-row DT with item column", quote({
-  dt <- getExportedValue("devpackage", "as.data.table")(b1_empty)
+  dt <- get("as.data.table", pos = "package:devpackage")(b1_empty)
   data.table::is.data.table(dt) && nrow(dt) == 0L && identical(names(dt), "item")
 }))
 
@@ -1543,9 +1543,9 @@ check("incr-reload: Basket method still works via pkg_env after base.R changed",
   data.table::is.data.table(dt) && identical(dt$item, c("x", "y"))
 }))
 
-check("incr-reload: Basket direct call via getExportedValue after reload", quote({
+check("incr-reload: Basket direct call via pkg_env after reload", quote({
   b_incr2 <- new("Basket", contents = c("x", "y"))
-  dt <- getExportedValue("devpackage", "as.data.table")(b_incr2)
+  dt <- get("as.data.table", pos = "package:devpackage")(b_incr2)
   data.table::is.data.table(dt) && identical(dt$item, c("x", "y"))
 }))
 
@@ -1556,7 +1556,7 @@ check("incr-reload: Basket direct call evaluated in pkg_env scope after reload",
 }))
 
 check("incr-reload: empty Basket yields 0-row DT after reload", quote({
-  dt <- getExportedValue("devpackage", "as.data.table")(new("Basket", contents = character(0)))
+  dt <- get("as.data.table", pos = "package:devpackage")(new("Basket", contents = character(0)))
   data.table::is.data.table(dt) && nrow(dt) == 0L && identical(names(dt), "item")
 }))
 
