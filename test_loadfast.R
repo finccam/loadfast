@@ -1536,6 +1536,14 @@ check("incr-reload: Basket method still registered after base.R changed", quote(
   existsMethod("as.data.table", "Basket")
 ))
 
+check("incr-reload: as.data.table implicit generic still in ns_env after reload (not reverted to S3 fn)", quote(
+  is(get("as.data.table", envir = ns4b, inherits = FALSE), "genericFunction")
+))
+
+check("incr-reload: as.data.table in pkg_env is still the implicit generic after reload", quote(
+  is(get("as.data.table", pos = "package:devpackage", inherits = FALSE), "genericFunction")
+))
+
 check("incr-reload: Basket method still works via pkg_env after base.R changed", quote({
   b_incr <- new("Basket", contents = c("x", "y"))
   f <- get("as.data.table", pos = pkg_env4)
