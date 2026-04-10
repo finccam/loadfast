@@ -1931,6 +1931,62 @@ check("lockfile: full reload resets warning baseline", quote(
   !any(grepl("renv.lock changed", lock_reload_full$warnings))
 ))
 
+# --- 4l: .onLoad hook is called during full and incremental loads ---
+cat("\n--- 4l: .onLoad hook execution ---\n\n")
+
+tmp_onload <- tempfile("loadfast_onload_")
+copy_baseline(tmp_onload)
+remove_renv_lock(tmp_onload)
+
+writeLines(c(
+  ".onLoad_call_count <- 0L",
+  ".onLoad <- function(libname, pkgname) {",
+  "  .onLoad_call_count <<- .onLoad_call_count + 1L",
+  "  .onLoad_libname <<- libname",
+  "  .onLoad_pkgname <<- pkgname",
+  "}"
+), file.path(tmp_onload, "R", "zzz.R"))
+
+ns_onload <- load_fast(tmp_onload, helpers = FALSE, attach_testthat = FALSE)
+
+check(".onLoad: is called on full load", quote(
+  exists(".onLoad_call_count", envir = ns_onload, inherits = FALSE) &&
+    get(".onLoad_call_count", envir = ns_onload) == 1L
+))
+
+check(".onLoad: receives correct pkgname", quote(
+  get(".onLoad_pkgname", envir = ns_onload) == "devpackage"
+))
+
+check(".onLoad: receives dirname(abs_path) as libname", quote(
+  identical(
+    normalizePath(get(".onLoad_libname", envir = ns_onload), mustWork = FALSE),
+    normalizePath(dirname(tmp_onload), mustWork = FALSE)
+  )
+))
+
+# Incremental reload — nothing changed => short-circuit, .onLoad not re-called
+ns_onload_nochg <- load_fast(tmp_onload, helpers = FALSE, attach_testthat = FALSE)
+
+check(".onLoad: not called again on no-change reload", quote(
+  get(".onLoad_call_count", envir = ns_onload_nochg) == 1L
+))
+
+# Trigger an incremental reload by modifying base.R
+writeLines(c(
+  "add <- function(a, b) a + b + 9999"
+), file.path(tmp_onload, "R", "base.R"))
+
+ns_onload_incr <- load_fast(tmp_onload, helpers = FALSE, attach_testthat = FALSE)
+
+check(".onLoad: called again on incremental reload (files changed)", quote(
+  get(".onLoad_call_count", envir = ns_onload_incr) == 2L
+))
+
+check(".onLoad: add() reflects incremental change", quote(
+  get("add", envir = ns_onload_incr)(1, 2) == 10002
+))
+
 # ============================================================================
 # Summary
 # ============================================================================

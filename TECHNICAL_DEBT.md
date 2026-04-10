@@ -48,24 +48,6 @@ If the `Package:` field in `DESCRIPTION` changes in place for the same directory
 
 ## Low-priority debt
 
-### 5. Load hook behavior is not explicitly tested
-**Why this matters**
-
-The loader aims to behave like a practical development-time package loader, but the test suite does not currently pin down the behavior of `.onLoad()` and `.onAttach()` hooks.
-
-**Risk**
-- Hook execution semantics may drift unnoticed during refactors
-- Full and incremental loads may behave inconsistently
-- Package state initialized by hooks may be wrong in edge cases
-
-**Preferred fix**
-- Add focused tests that define and exercise `.onLoad()` / `.onAttach()` in a temp package
-- Verify behavior on first load, incremental reload, and `full = TRUE`
-- Document any intentional differences from `devtools::load_all()`
-
-**Priority**
-- Low
-
 ## Low-priority debt
 
 ### 3. Testthat detection logic is duplicated

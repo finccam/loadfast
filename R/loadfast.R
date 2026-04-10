@@ -227,6 +227,9 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       "]"
     )
 
+    .loadfast.run_onload(ns_env, abs_path, pkg_name)
+    .timer("incr .onLoad")
+
     .loadfast.source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
     .timer("TOTAL (incremental)")
     return(invisible(ns_env))
@@ -398,6 +401,9 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   }
   .timer("attach testthat")
 
+  .loadfast.run_onload(ns_env, abs_path, pkg_name)
+  .timer(".onLoad")
+
   pkg_env <- attach(NULL, name = pkg_env_name)
   list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
   list2env(as.list(impenv, all.names = TRUE), envir = pkg_env)
@@ -494,6 +500,17 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
 
   message(registration_message)
   invisible(TRUE)
+}
+
+.loadfast.run_onload <- function(ns_env, abs_path, pkg_name) {
+  if (!exists(".onLoad", envir = ns_env, inherits = FALSE)) return(invisible(NULL))
+  tryCatch(
+    get(".onLoad", envir = ns_env, inherits = FALSE)(dirname(abs_path), pkg_name),
+    error = function(e) {
+      warning("Error in .onLoad() for '", pkg_name, "': ", conditionMessage(e), call. = FALSE)
+    }
+  )
+  invisible(NULL)
 }
 
 .loadfast.source_one <- function(f, ns_env) {
