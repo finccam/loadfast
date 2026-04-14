@@ -169,6 +169,33 @@ check("isNamespace() returns TRUE", quote(
   isNamespace(ns)
 ))
 
+check(".__DEVTOOLS__ marker is set (enables testthat mocking)", quote(
+  !is.null(ns[[".__DEVTOOLS__"]])
+))
+
+if (requireNamespace("pkgload", quietly = TRUE)) {
+  check("pkgload::dev_meta() recognizes loadfast-loaded package", quote(
+    !is.null(pkgload::dev_meta("devpackage"))
+  ))
+
+  check("with_mocked_bindings() auto-detects loadfast-loaded package", quote({
+    result <- testthat::with_mocked_bindings(
+      get("add", envir = asNamespace("devpackage"))(1, 2),
+      add = function(a, b) 999L,
+      .package = "devpackage"
+    )
+    result == 999L
+  }))
+
+  check("with_mocked_bindings() without .package uses loadfast-loaded package", quote({
+    result <- testthat::with_mocked_bindings(
+      get("add", envir = asNamespace("devpackage"))(1, 2),
+      add = function(a, b) 999L
+    )
+    result == 999L
+  }))
+}
+
 # --- Search path ---
 check("package:devpackage is on the search path", quote(
   "package:devpackage" %in% search()
