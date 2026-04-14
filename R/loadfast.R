@@ -265,6 +265,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   setNamespaceInfo(ns_env, "dynlibs", NULL)
   setNamespaceInfo(ns_env, "S3methods", matrix(NA_character_, 0L, 4L))
   ns_env[[".__S3MethodsTable__."]] <- new.env(hash = TRUE, parent = baseenv())
+  ns_env[[".__DEVTOOLS__"]] <- new.env(parent = ns_env)
 
   reg <- rlang::ns_registry_env()
   reg[[pkg_name]] <- ns_env
