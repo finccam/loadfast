@@ -386,17 +386,19 @@ repo_loadfast_path <- normalizePath(file.path("R", "loadfast.R"), mustWork = TRU
 repo_devpackage_path <- normalizePath("devpackage", mustWork = TRUE)
 repo_loadfast_path_quoted <- encodeString(repo_loadfast_path, quote = "\"")
 repo_devpackage_path_quoted <- encodeString(repo_devpackage_path, quote = "\"")
+s4_digest_object_line <- "obj <- animal('Rex', 'dog', 4)"
+s4_digest_report_line <- "cat(digest::digest(obj), if (is.null(names(attr(class(obj), 'package')))) 'unnamed' else 'named', sep = '\\n')"
 
 s4_digest_loadfast <- run_rscript(c(
   sprintf("suppressMessages(source(%s))", repo_loadfast_path_quoted),
   sprintf("suppressMessages(load_fast(%s, helpers = FALSE, attach_testthat = FALSE, full = TRUE))", repo_devpackage_path_quoted),
-  "obj <- animal('Rex', 'dog', 4)",
-  "cat(digest::digest(obj), if (is.null(names(attr(class(obj), 'package')))) 'unnamed' else 'named', sep = '\\n')"
+  s4_digest_object_line,
+  s4_digest_report_line
 ))
 s4_digest_loadall <- run_rscript(c(
   sprintf("pkgload::load_all(%s, helpers = FALSE, quiet = TRUE)", repo_devpackage_path_quoted),
-  "obj <- animal('Rex', 'dog', 4)",
-  "cat(digest::digest(obj), if (is.null(names(attr(class(obj), 'package')))) 'unnamed' else 'named', sep = '\\n')"
+  s4_digest_object_line,
+  s4_digest_report_line
 ))
 
 s4_digest_loadfast_lines <- tail(s4_digest_loadfast$output, 2L)
