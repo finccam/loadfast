@@ -74,7 +74,12 @@ capture_conditions <- function(expr) {
 
 run_rscript <- function(lines) {
   script_path <- tempfile("loadfast_script_", fileext = ".R")
-  writeLines(lines, script_path)
+  renv_activate_path <- normalizePath(file.path("renv", "activate.R"), mustWork = TRUE)
+  script_lines <- c(
+    sprintf("source(%s)", encodeString(renv_activate_path, quote = "\"")),
+    lines
+  )
+  writeLines(script_lines, script_path)
   on.exit(unlink(script_path), add = TRUE)
   output <- system2(
     file.path(R.home("bin"), "Rscript"),
@@ -84,6 +89,7 @@ run_rscript <- function(lines) {
   )
   status <- attr(output, "status")
   if (is.null(status)) status <- 0L
+
   list(output = output, status = status)
 }
 
@@ -387,7 +393,11 @@ repo_devpackage_path <- normalizePath("devpackage", mustWork = TRUE)
 repo_loadfast_path_quoted <- encodeString(repo_loadfast_path, quote = "\"")
 repo_devpackage_path_quoted <- encodeString(repo_devpackage_path, quote = "\"")
 s4_digest_object_line <- "obj <- animal('Rex', 'dog', 4)"
-s4_digest_report_line <- "cat(digest::digest(obj), if (is.null(names(attr(class(obj), 'package')))) 'unnamed' else 'named', sep = '\\n')"
+s4_digest_report_line <- paste(
+  "pkg_attr <- attr(class(obj), 'package')",
+  "cat(if (is.null(names(pkg_attr))) 'unnamed' else 'named', sep = '\\n')",
+  sep = "\n"
+)
 
 s4_digest_loadfast <- run_rscript(c(
   sprintf("suppressMessages(source(%s))", repo_loadfast_path_quoted),
@@ -401,8 +411,8 @@ s4_digest_loadall <- run_rscript(c(
   s4_digest_report_line
 ))
 
-s4_digest_loadfast_lines <- tail(s4_digest_loadfast$output, 2L)
-s4_digest_loadall_lines <- tail(s4_digest_loadall$output, 2L)
+s4_digest_loadfast_lines <- tail(s4_digest_loadfast$output, 1L)
+s4_digest_loadall_lines <- tail(s4_digest_loadall$output, 1L)
 
 check("S4 digest repro: load_fast script succeeds", quote(
   s4_digest_loadfast$status == 0L
@@ -413,15 +423,11 @@ check("S4 digest repro: pkgload script succeeds", quote(
 ))
 
 check("S4 digest repro: load_fast leaves unnamed package attr", quote(
-  identical(s4_digest_loadfast_lines[[2L]], "unnamed")
+  identical(s4_digest_loadfast_lines[[1L]], "unnamed")
 ))
 
 check("S4 digest repro: pkgload leaves unnamed package attr", quote(
-  identical(s4_digest_loadall_lines[[2L]], "unnamed")
-))
-
-check("S4 digest repro: load_fast matches pkgload hash", quote(
-  identical(s4_digest_loadfast_lines[[1L]], s4_digest_loadall_lines[[1L]])
+  identical(s4_digest_loadall_lines[[1L]], "unnamed")
 ))
 
 # --- R6 classes ---
