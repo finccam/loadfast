@@ -74,12 +74,7 @@ capture_conditions <- function(expr) {
 
 run_rscript <- function(lines) {
   script_path <- tempfile("loadfast_script_", fileext = ".R")
-  renv_activate_path <- normalizePath(file.path("renv", "activate.R"), mustWork = TRUE)
-  script_lines <- c(
-    sprintf("source(%s)", encodeString(renv_activate_path, quote = "\"")),
-    lines
-  )
-  writeLines(script_lines, script_path)
+  writeLines(lines, script_path)
   on.exit(unlink(script_path), add = TRUE)
   output <- system2(
     file.path(R.home("bin"), "Rscript"),
