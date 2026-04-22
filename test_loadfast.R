@@ -395,7 +395,8 @@ repo_devpackage_path_quoted <- encodeString(repo_devpackage_path, quote = "\"")
 s4_digest_object_line <- "obj <- animal('Rex', 'dog', 4)"
 s4_digest_report_line <- paste(
   "pkg_attr <- attr(class(obj), 'package')",
-  "cat(if (is.null(names(pkg_attr))) 'unnamed' else 'named', sep = '\\n')",
+  "cat(sprintf('HASH=%s', digest::digest(obj)), sep = '\\n')",
+  "cat(sprintf('PKG_ATTR=%s', if (is.null(names(pkg_attr))) 'unnamed' else 'named'), sep = '\\n')",
   sep = "\n"
 )
 
@@ -411,8 +412,10 @@ s4_digest_loadall <- run_rscript(c(
   s4_digest_report_line
 ))
 
-s4_digest_loadfast_lines <- tail(s4_digest_loadfast$output, 1L)
-s4_digest_loadall_lines <- tail(s4_digest_loadall$output, 1L)
+s4_digest_loadfast_hash_line <- grep("^HASH=", s4_digest_loadfast$output, value = TRUE)
+s4_digest_loadall_hash_line <- grep("^HASH=", s4_digest_loadall$output, value = TRUE)
+s4_digest_loadfast_pkg_attr_line <- grep("^PKG_ATTR=", s4_digest_loadfast$output, value = TRUE)
+s4_digest_loadall_pkg_attr_line <- grep("^PKG_ATTR=", s4_digest_loadall$output, value = TRUE)
 
 check("S4 digest repro: load_fast script succeeds", quote(
   s4_digest_loadfast$status == 0L
@@ -422,12 +425,36 @@ check("S4 digest repro: pkgload script succeeds", quote(
   s4_digest_loadall$status == 0L
 ))
 
+check("S4 digest repro: load_fast emitted hash line", quote(
+  length(s4_digest_loadfast_hash_line) == 1L
+))
+
+check("S4 digest repro: pkgload emitted hash line", quote(
+  length(s4_digest_loadall_hash_line) == 1L
+))
+
+check("S4 digest repro: load_fast emitted package attr line", quote(
+  length(s4_digest_loadfast_pkg_attr_line) == 1L
+))
+
+check("S4 digest repro: pkgload emitted package attr line", quote(
+  length(s4_digest_loadall_pkg_attr_line) == 1L
+))
+
 check("S4 digest repro: load_fast leaves unnamed package attr", quote(
-  identical(s4_digest_loadfast_lines[[1L]], "unnamed")
+  length(s4_digest_loadfast_pkg_attr_line) == 1L &&
+    identical(s4_digest_loadfast_pkg_attr_line[[1L]], "PKG_ATTR=unnamed")
 ))
 
 check("S4 digest repro: pkgload leaves unnamed package attr", quote(
-  identical(s4_digest_loadall_lines[[1L]], "unnamed")
+  length(s4_digest_loadall_pkg_attr_line) == 1L &&
+    identical(s4_digest_loadall_pkg_attr_line[[1L]], "PKG_ATTR=unnamed")
+))
+
+check("S4 digest repro: load_fast matches pkgload hash", quote(
+  length(s4_digest_loadfast_hash_line) == 1L &&
+    length(s4_digest_loadall_hash_line) == 1L &&
+    identical(s4_digest_loadfast_hash_line[[1L]], s4_digest_loadall_hash_line[[1L]])
 ))
 
 # --- R6 classes ---
