@@ -186,8 +186,8 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     }
     .timer(paste0("incr source ", length(files_to_source), " files"))
 
-    list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
     list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
+    list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
     .timer("incr pkg_env sync")
 
     .loadfast.cache[[abs_path]] <- list(
@@ -383,9 +383,10 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   .timer(paste0("source ", length(r_files), " files"))
 
   if (file.exists(ns_file)) {
-    exports <- nsInfo$exports
-    if (length(exports) > 0L) {
-      namespaceExport(ns_env, exports)
+    all_exports <- unique(c(nsInfo$exports, nsInfo$exportMethods, nsInfo$exportClasses))
+    all_exports <- all_exports[nzchar(all_exports)]
+    if (length(all_exports) > 0L) {
+      namespaceExport(ns_env, all_exports)
     }
   }
 
@@ -406,8 +407,8 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   .timer(".onLoad")
 
   pkg_env <- attach(NULL, name = pkg_env_name)
-  list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
   list2env(as.list(impenv, all.names = TRUE), envir = pkg_env)
+  list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
   .timer("attach pkg to search path")
 
   if (isTRUE(helpers) && uses_testthat) {

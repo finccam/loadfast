@@ -554,6 +554,69 @@ check("testthat devpackage: all tests pass", quote(
 
 cat(sprintf("  (testthat devpackage: %d passed, %d failed)\n", n_tt_pass1, n_tt_fail1))
 
+# --- S4 method on imported S3 generic (as.data.table) ---
+b1        <- new("Basket", contents = c("apple", "pear"))
+b1_single <- new("Basket", contents = "only")
+b1_empty  <- new("Basket", contents = character(0))
+
+check("Basket class is defined", quote(
+  isClass("Basket")
+))
+
+check("as.data.table method is registered for Basket", quote(
+  existsMethod("as.data.table", "Basket")
+))
+
+check("as.data.table implicit generic is in ns_env (not just the imported S3 fn)", quote(
+  is(get("as.data.table", envir = ns, inherits = FALSE), "genericFunction")
+))
+
+check("as.data.table in pkg_env is the implicit generic (not overwritten by impenv)", quote(
+  is(get("as.data.table", pos = "package:devpackage", inherits = FALSE), "genericFunction")
+))
+
+check("as.data.table not in namespace exports (no exportMethods directive)", quote(
+  !"as.data.table" %in% getNamespaceExports("devpackage")
+))
+
+check("as.data.table(Basket) dispatches correctly from ns_env", quote({
+  f <- get("as.data.table", envir = ns)
+  dt <- f(b1)
+  data.table::is.data.table(dt) && identical(dt$item, c("apple", "pear"))
+}))
+
+check("as.data.table(Basket) dispatches correctly via search path", quote({
+  f <- get("as.data.table", pos = "package:devpackage")
+  dt <- f(b1)
+  data.table::is.data.table(dt) && identical(dt$item, c("apple", "pear"))
+}))
+
+check("as.data.table(Basket) direct call via pkg_env", quote({
+  dt <- get("as.data.table", pos = "package:devpackage")(b1)
+  data.table::is.data.table(dt) && identical(dt$item, c("apple", "pear"))
+}))
+
+check("as.data.table(Basket) direct call evaluated in pkg_env scope", quote({
+  dt <- evalq(as.data.table(b1), envir = as.environment("package:devpackage"))
+  data.table::is.data.table(dt) && identical(dt$item, c("apple", "pear"))
+}))
+
+check("as.data.table(Basket) single-element Basket", quote({
+  dt <- get("as.data.table", pos = "package:devpackage")(b1_single)
+  data.table::is.data.table(dt) && nrow(dt) == 1L && identical(dt$item, "only")
+}))
+
+check("as.data.table(Basket) empty Basket yields 0-row DT with item column", quote({
+  dt <- get("as.data.table", pos = "package:devpackage")(b1_empty)
+  data.table::is.data.table(dt) && nrow(dt) == 0L && identical(names(dt), "item")
+}))
+
+check("as.data.table on data.frame still works (non-Basket dispatch unaffected)", quote({
+  dt <- data.table::as.data.table(data.frame(x = 1:2, y = c("a", "b"), stringsAsFactors = FALSE))
+  data.table::is.data.table(dt) && identical(dt$x, 1:2)
+}))
+
+
 # ============================================================================
 # STAGE 2: Full reload with mutated code (project2-style changes, ad-hoc)
 # ============================================================================
@@ -1581,6 +1644,42 @@ check("remove-fn: R6 classes unaffected", quote(
   exists("Logger", envir = ns4b, inherits = FALSE) &&
     exists("Counter", envir = ns4b, inherits = FALSE)
 ))
+
+check("incr-reload: Basket method still registered after base.R changed", quote(
+  existsMethod("as.data.table", "Basket")
+))
+
+check("incr-reload: as.data.table implicit generic still in ns_env after reload (not reverted to S3 fn)", quote(
+  is(get("as.data.table", envir = ns4b, inherits = FALSE), "genericFunction")
+))
+
+check("incr-reload: as.data.table in pkg_env is still the implicit generic after reload", quote(
+  is(get("as.data.table", pos = "package:devpackage", inherits = FALSE), "genericFunction")
+))
+
+check("incr-reload: Basket method still works via pkg_env after base.R changed", quote({
+  b_incr <- new("Basket", contents = c("x", "y"))
+  f <- get("as.data.table", pos = pkg_env4)
+  dt <- f(b_incr)
+  data.table::is.data.table(dt) && identical(dt$item, c("x", "y"))
+}))
+
+check("incr-reload: Basket direct call via pkg_env after reload", quote({
+  b_incr2 <- new("Basket", contents = c("x", "y"))
+  dt <- get("as.data.table", pos = "package:devpackage")(b_incr2)
+  data.table::is.data.table(dt) && identical(dt$item, c("x", "y"))
+}))
+
+check("incr-reload: Basket direct call evaluated in pkg_env scope after reload", quote({
+  b_incr3 <- new("Basket", contents = c("x", "y"))
+  dt <- evalq(as.data.table(b_incr3), envir = as.environment("package:devpackage"))
+  data.table::is.data.table(dt) && identical(dt$item, c("x", "y"))
+}))
+
+check("incr-reload: empty Basket yields 0-row DT after reload", quote({
+  dt <- get("as.data.table", pos = "package:devpackage")(new("Basket", contents = character(0)))
+  data.table::is.data.table(dt) && nrow(dt) == 0L && identical(names(dt), "item")
+}))
 
 ns4b_full <- load_fast(tmp_c, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
 
