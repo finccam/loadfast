@@ -16,4 +16,5 @@ Imports:
 DevDeps:
     testthat,
     R6,
-    data.table
+    data.table,
+    digest

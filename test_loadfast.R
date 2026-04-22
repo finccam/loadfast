@@ -72,6 +72,22 @@ capture_conditions <- function(expr) {
   list(value = value, warnings = warnings, messages = messages)
 }
 
+run_rscript <- function(lines) {
+  script_path <- tempfile("loadfast_script_", fileext = ".R")
+  writeLines(lines, script_path)
+  on.exit(unlink(script_path), add = TRUE)
+  output <- system2(
+    file.path(R.home("bin"), "Rscript"),
+    c("--vanilla", script_path),
+    stdout = TRUE,
+    stderr = TRUE
+  )
+  status <- attr(output, "status")
+  if (is.null(status)) status <- 0L
+
+  list(output = output, status = status)
+}
+
 copy_baseline <- function(dest) {
   dir.create(dest, recursive = TRUE, showWarnings = FALSE)
   invisible(file.copy(file.path("devpackage", "DESCRIPTION"), dest))
@@ -364,6 +380,76 @@ check("describe(Pet) includes owner via callNextMethod", quote(
 
 check("greet(Pet) works", quote(
   get("greet", envir = ns)(p1) == "Hello! My name is Milo and I belong to Alice"
+))
+
+# --- S4 digest compatibility with pkgload ---
+repo_loadfast_path <- normalizePath(file.path("R", "loadfast.R"), mustWork = TRUE)
+repo_devpackage_path <- normalizePath("devpackage", mustWork = TRUE)
+repo_loadfast_path_quoted <- encodeString(repo_loadfast_path, quote = "\"")
+repo_devpackage_path_quoted <- encodeString(repo_devpackage_path, quote = "\"")
+s4_digest_object_line <- "obj <- animal('Rex', 'dog', 4)"
+s4_digest_report_line <- paste(
+  "pkg_attr <- attr(class(obj), 'package')",
+  "cat(sprintf('HASH=%s', digest::digest(obj)), sep = '\\n')",
+  "cat(sprintf('PKG_ATTR=%s', if (is.null(names(pkg_attr))) 'unnamed' else 'named'), sep = '\\n')",
+  sep = "\n"
+)
+
+s4_digest_loadfast <- run_rscript(c(
+  sprintf("suppressMessages(source(%s))", repo_loadfast_path_quoted),
+  sprintf("suppressMessages(load_fast(%s, helpers = FALSE, attach_testthat = FALSE, full = TRUE))", repo_devpackage_path_quoted),
+  s4_digest_object_line,
+  s4_digest_report_line
+))
+s4_digest_loadall <- run_rscript(c(
+  sprintf("pkgload::load_all(%s, helpers = FALSE, quiet = TRUE)", repo_devpackage_path_quoted),
+  s4_digest_object_line,
+  s4_digest_report_line
+))
+
+s4_digest_loadfast_hash_line <- grep("^HASH=", s4_digest_loadfast$output, value = TRUE)
+s4_digest_loadall_hash_line <- grep("^HASH=", s4_digest_loadall$output, value = TRUE)
+s4_digest_loadfast_pkg_attr_line <- grep("^PKG_ATTR=", s4_digest_loadfast$output, value = TRUE)
+s4_digest_loadall_pkg_attr_line <- grep("^PKG_ATTR=", s4_digest_loadall$output, value = TRUE)
+
+check("S4 digest repro: load_fast script succeeds", quote(
+  s4_digest_loadfast$status == 0L
+))
+
+check("S4 digest repro: pkgload script succeeds", quote(
+  s4_digest_loadall$status == 0L
+))
+
+check("S4 digest repro: load_fast emitted hash line", quote(
+  length(s4_digest_loadfast_hash_line) == 1L
+))
+
+check("S4 digest repro: pkgload emitted hash line", quote(
+  length(s4_digest_loadall_hash_line) == 1L
+))
+
+check("S4 digest repro: load_fast emitted package attr line", quote(
+  length(s4_digest_loadfast_pkg_attr_line) == 1L
+))
+
+check("S4 digest repro: pkgload emitted package attr line", quote(
+  length(s4_digest_loadall_pkg_attr_line) == 1L
+))
+
+check("S4 digest repro: load_fast leaves unnamed package attr", quote(
+  length(s4_digest_loadfast_pkg_attr_line) == 1L &&
+    identical(s4_digest_loadfast_pkg_attr_line[[1L]], "PKG_ATTR=unnamed")
+))
+
+check("S4 digest repro: pkgload leaves unnamed package attr", quote(
+  length(s4_digest_loadall_pkg_attr_line) == 1L &&
+    identical(s4_digest_loadall_pkg_attr_line[[1L]], "PKG_ATTR=unnamed")
+))
+
+check("S4 digest repro: load_fast matches pkgload hash", quote(
+  length(s4_digest_loadfast_hash_line) == 1L &&
+    length(s4_digest_loadall_hash_line) == 1L &&
+    identical(s4_digest_loadfast_hash_line[[1L]], s4_digest_loadall_hash_line[[1L]])
 ))
 
 # --- R6 classes ---

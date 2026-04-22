@@ -59,7 +59,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   desc_path <- file.path(abs_path, "DESCRIPTION")
   if (!file.exists(desc_path)) stop("DESCRIPTION file not found at: ", desc_path)
   desc_fields <- read.dcf(desc_path)
-  pkg_name <- if ("Package" %in% colnames(desc_fields)) trimws(desc_fields[1L, "Package"]) else ""
+  pkg_name <- if ("Package" %in% colnames(desc_fields)) unname(trimws(desc_fields[1L, "Package"])) else ""
   if (!nzchar(pkg_name)) stop("No valid 'Package' field found in DESCRIPTION")
 
   pkg_env_name <- paste0("package:", pkg_name)
