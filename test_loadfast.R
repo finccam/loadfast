@@ -124,6 +124,21 @@ rename_package <- function(pkg_path, pkg_name) {
   }
 }
 
+# The baseline ships an S3 fixture (s3_classes.R) that defines methods on the
+# `temperature` class. When several packages are built from the same baseline in
+# one session, they would all register those same methods and collide in R's
+# shared S3 tables (an "overwritten" note per reload). Strip the fixture from
+# packages that only exist to test cross-package imports so those stages stay
+# focused and quiet. Dedicated S3 stages use their own, distinctly named classes.
+strip_s3_fixture <- function(pkg_path) {
+  unlink(file.path(pkg_path, "R", "s3_classes.R"))
+  ns_path <- file.path(pkg_path, "NAMESPACE")
+  ns_lines <- readLines(ns_path, warn = FALSE)
+  drop <- grepl("^S3method\\(", ns_lines) |
+    grepl("^export\\((new_temperature|describe_s3)\\)$", ns_lines)
+  writeLines(ns_lines[!drop], ns_path)
+}
+
 replace_description_field <- function(desc_path, field, replacement_lines) {
   lines <- readLines(desc_path, warn = FALSE)
   start_idx <- grep(paste0("^", field, ":"), lines)
@@ -507,6 +522,43 @@ check("Counter$reset() zeroes out", quote(
 
 check("Counter does NOT have decrement yet", quote(
   is.null(ctr1$decrement)
+))
+
+# --- S3 classes and methods ---
+# The S3 methods are declared with S3method() (not exported by name), so correct
+# dispatch depends on load_fast() populating the namespace S3 methods table via
+# registerS3methods(). These would silently fall through to *.default (or the
+# base method) if the table were left empty.
+# A method on a base generic registers in base's S3 table; a method on a
+# package-defined generic registers in the package's own S3 table.
+check("S3 method for base generic registered in base's table", quote(
+  exists("print.temperature", envir = get(".__S3MethodsTable__.", envir = asNamespace("base")), inherits = FALSE)
+))
+
+check("S3 method for package generic registered in package's table", quote(
+  exists("describe_s3.temperature", envir = get(".__S3MethodsTable__.", envir = ns), inherits = FALSE)
+))
+
+s3_temp <- get("new_temperature", envir = ns)(21)
+
+check("S3 dispatch: format() finds the temperature method", quote(
+  format(s3_temp) == "21 C"
+))
+
+check("S3 dispatch: as.character() finds the temperature method", quote(
+  as.character(s3_temp) == "21 C"
+))
+
+check("S3 dispatch: print() finds the temperature method", quote(
+  any(grepl("Temperature: 21 C", utils::capture.output(print(s3_temp)), fixed = TRUE))
+))
+
+check("S3 dispatch: package-defined generic dispatches to method", quote(
+  get("describe_s3", envir = ns)(s3_temp) == "a temperature of 21 degrees Celsius"
+))
+
+check("S3 dispatch: package-defined generic falls back to default", quote(
+  get("describe_s3", envir = ns)(42) == "an unknown object"
 ))
 
 # --- testthat helpers sourced into pkg env ---
@@ -1170,6 +1222,8 @@ tmp_multi_a <- tempfile("loadfast_multi_a_")
 tmp_multi_b <- tempfile("loadfast_multi_b_")
 copy_baseline(tmp_multi_a)
 copy_baseline(tmp_multi_b)
+strip_s3_fixture(tmp_multi_a)
+strip_s3_fixture(tmp_multi_b)
 
 rename_package(tmp_multi_a, "packagea")
 rename_package(tmp_multi_b, "packageb")
@@ -1338,6 +1392,8 @@ tmp_order_a <- tempfile("loadfast_order_a_")
 tmp_order_b <- tempfile("loadfast_order_b_")
 copy_baseline(tmp_order_a)
 copy_baseline(tmp_order_b)
+strip_s3_fixture(tmp_order_a)
+strip_s3_fixture(tmp_order_b)
 
 rename_package(tmp_order_a, "ordapkg")
 rename_package(tmp_order_b, "ordbpkg")
@@ -2044,8 +2100,8 @@ check("lockfile: full reload resets warning baseline", quote(
   !any(grepl("renv.lock changed", lock_reload_full$warnings))
 ))
 
-# --- 4l: .onLoad hook is called during full and incremental loads ---
-cat("\n--- 4l: .onLoad hook execution ---\n\n")
+# --- 4l: .onLoad and .onAttach hooks are called during load ---
+cat("\n--- 4l: .onLoad / .onAttach hook execution ---\n\n")
 
 tmp_onload <- tempfile("loadfast_onload_")
 copy_baseline(tmp_onload)
@@ -2053,10 +2109,15 @@ remove_renv_lock(tmp_onload)
 
 writeLines(c(
   ".onLoad_call_count <- 0L",
+  ".onAttach_call_count <- 0L",
   ".onLoad <- function(libname, pkgname) {",
   "  .onLoad_call_count <<- .onLoad_call_count + 1L",
   "  .onLoad_libname <<- libname",
   "  .onLoad_pkgname <<- pkgname",
+  "}",
+  ".onAttach <- function(libname, pkgname) {",
+  "  .onAttach_call_count <<- .onAttach_call_count + 1L",
+  "  .onAttach_pkgname <<- pkgname",
   "}"
 ), file.path(tmp_onload, "R", "zzz.R"))
 
@@ -2078,11 +2139,24 @@ check(".onLoad: receives dirname(abs_path) as libname", quote(
   )
 ))
 
+check(".onAttach: is called on full load", quote(
+  get(".onAttach_call_count", envir = ns_onload) == 1L
+))
+
+check(".onAttach: receives correct pkgname", quote(
+  get(".onAttach_pkgname", envir = ns_onload) == "devpackage"
+))
+
 # Incremental reload — nothing changed => short-circuit, .onLoad not re-called
 ns_onload_nochg <- load_fast(tmp_onload, helpers = FALSE, attach_testthat = FALSE)
 
 check(".onLoad: not called again on no-change reload", quote(
   get(".onLoad_call_count", envir = ns_onload_nochg) == 1L
+))
+
+# .onAttach is an attach-time hook; incremental reloads do not re-attach.
+check(".onAttach: not re-called on incremental reload (no re-attach)", quote(
+  get(".onAttach_call_count", envir = ns_onload_nochg) == 1L
 ))
 
 # Trigger an incremental reload by modifying base.R
@@ -2096,8 +2170,248 @@ check(".onLoad: called again on incremental reload (files changed)", quote(
   get(".onLoad_call_count", envir = ns_onload_incr) == 2L
 ))
 
+check(".onAttach: still not re-called after incremental reload with changes", quote(
+  get(".onAttach_call_count", envir = ns_onload_incr) == 1L
+))
+
 check(".onLoad: add() reflects incremental change", quote(
   get("add", envir = ns_onload_incr)(1, 2) == 10002
+))
+
+# --- 4m: incremental reload refreshes S3 methods ---
+cat("\n--- 4m: incremental S3 method reload ---\n\n")
+
+tmp_s3incr <- tempfile("loadfast_s3incr_")
+copy_baseline(tmp_s3incr)
+
+ns_s3i <- load_fast(tmp_s3incr, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+
+new_temp_s3i <- function(env, x) get("new_temperature", envir = env)(x)
+
+check("s3-incr: initial package-generic dispatch", quote(
+  get("describe_s3", envir = ns_s3i)(new_temp_s3i(ns_s3i, 5)) ==
+    "a temperature of 5 degrees Celsius"
+))
+
+check("s3-incr: initial base-generic dispatch", quote(
+  format(new_temp_s3i(ns_s3i, 5)) == "5 C"
+))
+
+# Re-sourcing s3_classes.R replaces the method functions in the namespace; the
+# S3 tables (base's for format, the namespace's for describe_s3) must be rebuilt
+# to point at the new definitions rather than the stale ones.
+writeLines(c(
+  "new_temperature <- function(celsius) {",
+  "  structure(list(celsius = celsius), class = 'temperature')",
+  "}",
+  "print.temperature <- function(x, ...) { cat('T=', x$celsius, '\\n'); invisible(x) }",
+  "format.temperature <- function(x, ...) paste0('temp(', x$celsius, ')')",
+  "as.character.temperature <- function(x, ...) format(x)",
+  "describe_s3 <- function(x, ...) UseMethod('describe_s3')",
+  "describe_s3.default <- function(x, ...) 'unknown'",
+  "describe_s3.temperature <- function(x, ...) paste0('CHANGED:', x$celsius)"
+), file.path(tmp_s3incr, "R", "s3_classes.R"))
+
+ns_s3i2 <- load_fast(tmp_s3incr, helpers = FALSE, attach_testthat = FALSE)
+
+check("s3-incr: package-generic method refreshed after incremental reload", quote(
+  get("describe_s3", envir = ns_s3i2)(new_temp_s3i(ns_s3i2, 5)) == "CHANGED:5"
+))
+
+check("s3-incr: base-generic method refreshed after incremental reload", quote(
+  format(new_temp_s3i(ns_s3i2, 5)) == "temp(5)"
+))
+
+# ============================================================================
+# STAGE 5: Cross-package fidelity (exports, S3 dispatch, S4 export, `::`)
+#   These exercise the machinery that only matters once a *second* package
+#   depends on a load_fast()-loaded one: exportPattern(), S3method registration
+#   across namespaces, S4 class/method export, and `pkg::name` resolution.
+#   Distinct class names are used per package so nothing collides.
+# ============================================================================
+cat("\n--- Stage 5: cross-package fidelity ---\n\n")
+
+write_pkg <- function(root, name, desc_extra, ns_lines, r_files) {
+  dir.create(file.path(root, "R"), recursive = TRUE, showWarnings = FALSE)
+  writeLines(
+    c(paste0("Package: ", name), "Title: t", "Version: 0.0.1",
+      "Description: d.", "License: MIT", desc_extra),
+    file.path(root, "DESCRIPTION")
+  )
+  writeLines(ns_lines, file.path(root, "NAMESPACE"))
+  for (fn in names(r_files)) writeLines(r_files[[fn]], file.path(root, "R", fn))
+  .tmp_dirs <<- c(.tmp_dirs, root)
+}
+
+# --- 5a: exportPattern() populates exports and `pkg::fn` resolves ---
+cat("\n--- 5a: exportPattern and :: resolution ---\n\n")
+
+tmp_ep <- tempfile("loadfast_exportpattern_")
+write_pkg(
+  tmp_ep, "eppkg",
+  desc_extra = character(0),
+  ns_lines = c("exportPattern(\"^[^.]\")"),
+  r_files = list("a.R" = c(
+    "ep_visible <- function(x) x * 3",
+    ".ep_hidden <- function() \"secret\""
+  ))
+)
+ns_ep <- load_fast(tmp_ep, helpers = FALSE, attach_testthat = FALSE)
+
+check("exportPattern: matched name is exported", quote(
+  exists("ep_visible", envir = getNamespaceInfo(ns_ep, "exports"), inherits = FALSE)
+))
+
+check("exportPattern: dotted name is not exported", quote(
+  !exists(".ep_hidden", envir = getNamespaceInfo(ns_ep, "exports"), inherits = FALSE)
+))
+
+check("exportPattern: eppkg::ep_visible resolves without a 'lazydata' error", quote(
+  getExportedValue("eppkg", "ep_visible")(4) == 12
+))
+
+# exportPattern(".") matches dotted names too; internal namespace machinery must
+# still never be exported (base::loadNamespace applies the same stoplist).
+tmp_epall <- tempfile("loadfast_exportall_")
+write_pkg(
+  tmp_epall, "epallpkg",
+  desc_extra = character(0),
+  ns_lines = c("exportPattern(\".\")"),
+  r_files = list("a.R" = c(
+    "user_fn <- function() 1",
+    ".user_hidden <- function() 2"
+  ))
+)
+ns_epall <- load_fast(tmp_epall, helpers = FALSE, attach_testthat = FALSE)
+epall_exports <- getNamespaceExports("epallpkg")
+
+check("exportPattern('.'): user names (dotted and plain) are exported", quote(
+  all(c("user_fn", ".user_hidden") %in% epall_exports)
+))
+
+check("exportPattern('.'): internal namespace objects are not leaked", quote(
+  !any(c(".__NAMESPACE__.", ".__S3MethodsTable__.", ".__DEVTOOLS__",
+         ".packageName", ".onLoad") %in% epall_exports)
+))
+
+# --- 5b: `pkg::missing` gives a proper not-exported error, not 'lazydata' ---
+missing_err <- tryCatch(
+  getExportedValue("eppkg", "does_not_exist"),
+  error = function(e) conditionMessage(e)
+)
+
+check("colon: missing export reports a not-exported error", quote(
+  grepl("not an exported object", missing_err, fixed = TRUE)
+))
+
+check("colon: missing export does not surface the 'lazydata' internal", quote(
+  !grepl("lazydata", missing_err, fixed = TRUE)
+))
+
+# --- 5c: S3 dispatch works across package boundaries ---
+cat("\n--- 5c: cross-package S3 dispatch ---\n\n")
+
+tmp_s3prov <- tempfile("loadfast_s3prov_")
+tmp_s3cons <- tempfile("loadfast_s3cons_")
+write_pkg(
+  tmp_s3prov, "s3prov",
+  desc_extra = character(0),
+  ns_lines = c(
+    "export(new_gadget)", "export(render)",
+    "S3method(format, gadget)", "S3method(render, gadget)"
+  ),
+  r_files = list("a.R" = c(
+    "new_gadget <- function(id) structure(list(id = id), class = \"gadget\")",
+    "format.gadget <- function(x, ...) paste0(\"<gadget#\", x$id, \">\")",
+    "render <- function(x, ...) UseMethod(\"render\")",
+    "render.default <- function(x, ...) \"default-render\"",
+    "render.gadget <- function(x, ...) paste0(\"rendered \", format(x))"
+  ))
+)
+write_pkg(
+  tmp_s3cons, "s3cons",
+  desc_extra = c("Imports:", "    s3prov"),
+  ns_lines = c(
+    "importFrom(s3prov, new_gadget)", "importFrom(s3prov, render)",
+    "export(consume_format)", "export(consume_render)"
+  ),
+  r_files = list("b.R" = c(
+    "consume_format <- function(id) format(new_gadget(id))",
+    "consume_render <- function(id) render(new_gadget(id))"
+  ))
+)
+ns_s3prov <- load_fast(tmp_s3prov, helpers = FALSE, attach_testthat = FALSE)
+ns_s3cons <- load_fast(tmp_s3cons, helpers = FALSE, attach_testthat = FALSE)
+
+check("xpkg-s3: consumer dispatches a base generic to the provider's method", quote(
+  get("consume_format", envir = ns_s3cons)(7) == "<gadget#7>"
+))
+
+check("xpkg-s3: consumer dispatches the provider's own generic", quote(
+  get("consume_render", envir = ns_s3cons)(7) == "rendered <gadget#7>"
+))
+
+# --- 5d: S4 class + method export/import works across packages ---
+cat("\n--- 5d: cross-package S4 export/import ---\n\n")
+
+tmp_s4prov <- tempfile("loadfast_s4prov_")
+tmp_s4cons <- tempfile("loadfast_s4cons_")
+# The provider defines a method on the primitive generic `length` but does NOT
+# list it in exportMethods(); it should still be exportable/importable.
+write_pkg(
+  tmp_s4prov, "s4prov",
+  desc_extra = character(0),
+  ns_lines = c("import(methods)", "exportClasses(Sprocket)", "exportMethods(spin)"),
+  r_files = list("a.R" = c(
+    "setClass(\"Sprocket\", representation(teeth = \"numeric\"))",
+    "setGeneric(\"spin\", function(obj) standardGeneric(\"spin\"))",
+    "setMethod(\"spin\", \"Sprocket\", function(obj) obj@teeth * 2)",
+    "setMethod(\"length\", \"Sprocket\", function(x) length(x@teeth))"
+  ))
+)
+write_pkg(
+  tmp_s4cons, "s4cons",
+  desc_extra = c("Imports:", "    s4prov, methods"),
+  ns_lines = c(
+    "import(methods)", "importClassesFrom(s4prov, Sprocket)",
+    "importMethodsFrom(s4prov, spin)", "importMethodsFrom(s4prov, length)",
+    "export(make_and_spin)", "export(count_teeth)"
+  ),
+  r_files = list("b.R" = c(
+    "make_and_spin <- function(n) spin(new(\"Sprocket\", teeth = n))",
+    "count_teeth <- function(v) length(new(\"Sprocket\", teeth = v))"
+  ))
+)
+ns_s4prov <- load_fast(tmp_s4prov, helpers = FALSE, attach_testthat = FALSE)
+
+check("xpkg-s4: primitive-generic method table auto-exported without exportMethods", quote(
+  any(grepl("__T__length", getNamespaceExports("s4prov"), fixed = TRUE))
+))
+
+check("xpkg-s4: provider exports the class metadata object", quote(
+  exists(
+    paste0(methods::classMetaName(""), "Sprocket"),
+    envir = getNamespaceInfo(ns_s4prov, "exports"), inherits = FALSE
+  )
+))
+
+s4cons_load <- tryCatch(
+  load_fast(tmp_s4cons, helpers = FALSE, attach_testthat = FALSE),
+  error = function(e) e
+)
+
+check("xpkg-s4: consumer importClassesFrom + importMethodsFrom succeeds", quote(
+  is.environment(s4cons_load) && isNamespace(s4cons_load)
+))
+
+check("xpkg-s4: consumer uses the imported S4 class and method", quote(
+  !inherits(s4cons_load, "error") &&
+    get("make_and_spin", envir = s4cons_load)(6) == 12
+))
+
+check("xpkg-s4: consumer dispatches an imported primitive-generic S4 method", quote(
+  !inherits(s4cons_load, "error") &&
+    get("count_teeth", envir = s4cons_load)(c(3, 5, 7)) == 3
 ))
 
 # ============================================================================

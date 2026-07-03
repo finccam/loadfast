@@ -134,6 +134,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     old_lock_hash <- if (is.null(cached$lock_hash)) NA_character_ else cached$lock_hash
     registered_reload_files <- if (is.null(cached$registered_reload_files)) character(0) else cached$registered_reload_files
     pending_reload_message <- if (is.null(cached$pending_reload_message)) NULL else cached$pending_reload_message
+    s3_methods_matrix <- if (is.null(cached$s3_methods)) matrix(NA_character_, 0L, 4L) else cached$s3_methods
 
     if (!identical(current_lock_hash, old_lock_hash)) {
       warning(
@@ -168,6 +169,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
         pkg_name = pkg_name,
         hashes = current_hashes,
         lock_hash = old_lock_hash,
+        s3_methods = s3_methods_matrix,
         registered_reload_files = character(0),
         pending_reload_message = NULL
       )
@@ -186,6 +188,12 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     }
     .timer(paste0("incr source ", length(files_to_source), " files"))
 
+    # Re-sourcing a file replaces its function objects in `ns_env`, but the S3
+    # methods table holds separate (eagerly copied) references for methods on
+    # local generics, so it must be rebuilt to point at the fresh definitions.
+    .loadfast.register_s3(s3_methods_matrix, pkg_name, ns_env, reset = TRUE)
+    .timer("incr S3 re-registration")
+
     list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
     list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
     .timer("incr pkg_env sync")
@@ -195,6 +203,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       pkg_name = pkg_name,
       hashes = current_hashes,
       lock_hash = old_lock_hash,
+      s3_methods = s3_methods_matrix,
       registered_reload_files = character(0),
       pending_reload_message = NULL
     )
@@ -227,7 +236,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
       "]"
     )
 
-    .loadfast.run_onload(ns_env, abs_path, pkg_name)
+    .loadfast.run_hook(".onLoad", ns_env, abs_path, pkg_name)
     .timer("incr .onLoad")
 
     .loadfast.source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
@@ -260,9 +269,17 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   ns_env[[".__NAMESPACE__."]] <- info
   info[["spec"]] <- c(name = pkg_name, version = "0.0.0")
   setNamespaceInfo(ns_env, "exports", new.env(hash = TRUE, parent = baseenv()))
+  # `lazydata` must exist even for packages that ship no data: base's
+  # `getExportedValue()` (used by `pkg::name`) falls through to it for any name
+  # not in `exports`, and `getNamespaceInfo(ns, "lazydata")` errors with
+  # "object 'lazydata' not found" if the field is missing. See makeNamespace().
+  lazydata_env <- new.env(parent = baseenv(), hash = TRUE)
+  attr(lazydata_env, "name") <- paste0("lazydata:", pkg_name)
+  setNamespaceInfo(ns_env, "lazydata", lazydata_env)
   setNamespaceInfo(ns_env, "imports", list(base = TRUE))
   setNamespaceInfo(ns_env, "path", abs_path)
   setNamespaceInfo(ns_env, "dynlibs", NULL)
+  setNamespaceInfo(ns_env, "nativeRoutines", list())
   setNamespaceInfo(ns_env, "S3methods", matrix(NA_character_, 0L, 4L))
   ns_env[[".__S3MethodsTable__."]] <- new.env(hash = TRUE, parent = baseenv())
   ns_env[[".__DEVTOOLS__"]] <- new.env(parent = ns_env)
@@ -382,12 +399,16 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   }
   .timer(paste0("source ", length(r_files), " files"))
 
+  s3_methods_matrix <- matrix(NA_character_, 0L, 4L)
   if (file.exists(ns_file)) {
-    exports <- nsInfo$exports
+    exports <- .loadfast.compute_exports(ns_env, nsInfo, pkg_name)
     if (length(exports) > 0L) {
       namespaceExport(ns_env, exports)
     }
+    s3_methods_matrix <- nsInfo$S3methods
+    .loadfast.register_s3(s3_methods_matrix, pkg_name, ns_env)
   }
+  .timer("exports + S3 registration")
 
   uses_testthat <- local({
     test_dirs <- c(
@@ -402,13 +423,19 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   }
   .timer("attach testthat")
 
-  .loadfast.run_onload(ns_env, abs_path, pkg_name)
+  .loadfast.run_hook(".onLoad", ns_env, abs_path, pkg_name)
   .timer(".onLoad")
 
   pkg_env <- attach(NULL, name = pkg_env_name)
   list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
   list2env(as.list(impenv, all.names = TRUE), envir = pkg_env)
   .timer("attach pkg to search path")
+
+  # `.onAttach` is an attach-time hook (search-path attachment happens only on a
+  # full load), so it runs here rather than in the incremental path, mirroring
+  # library()/load_all(). `.onLoad` above covers the load-time hook.
+  .loadfast.run_hook(".onAttach", ns_env, abs_path, pkg_name)
+  .timer(".onAttach")
 
   if (isTRUE(helpers) && uses_testthat) {
     .loadfast.do_source_helpers(abs_path, pkg_env)
@@ -420,6 +447,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     pkg_name = pkg_name,
     hashes = current_hashes,
     lock_hash = current_lock_hash,
+    s3_methods = s3_methods_matrix,
     registered_reload_files = character(0),
     pending_reload_message = NULL
   )
@@ -503,12 +531,135 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
   invisible(TRUE)
 }
 
-.loadfast.run_onload <- function(ns_env, abs_path, pkg_name) {
-  if (!exists(".onLoad", envir = ns_env, inherits = FALSE)) return(invisible(NULL))
+# Compute the full set of names to export, mirroring base::loadNamespace():
+# explicit export(), exportPattern() expansion, and (when the package defines S4
+# metadata) exportClasses()/exportClassPattern() and exportMethods(). S4 classes
+# are exported as their `.__C__<class>` metadata objects and S4 methods as the
+# generic plus its `.__T__<generic>:<pkg>` method table, which is what
+# importClassesFrom()/importMethodsFrom() look for in another package.
+.loadfast.compute_exports <- function(ns_env, nsInfo, pkg_name) {
+  exports <- nsInfo$exports
+  for (p in nsInfo$exportPatterns) {
+    exports <- c(ls(ns_env, pattern = p, all.names = TRUE), exports)
+  }
+
+  has_s4 <- isNamespaceLoaded("methods") &&
+    isTRUE(tryCatch(methods:::.hasS4MetaData(ns_env), error = function(e) FALSE))
+  if (has_s4 && pkg_name != "methods") {
+    methods::cacheMetaData(ns_env, TRUE, ns_env)
+
+    for (p in nsInfo$exportPatterns) {
+      expp <- ls(ns_env, pattern = p, all.names = TRUE)
+      newEx <- !(expp %in% exports)
+      if (any(newEx)) exports <- c(expp[newEx], exports)
+    }
+
+    expClasses <- nsInfo$exportClasses
+    aClasses <- methods::getClasses(ns_env)
+    classPatterns <- nsInfo$exportClassPatterns
+    if (!length(classPatterns)) classPatterns <- nsInfo$exportPatterns
+    pClasses <- unique(unlist(lapply(classPatterns, grep, aClasses, value = TRUE)))
+    if (length(pClasses)) {
+      good <- vapply(pClasses, methods::isClass, NA, where = ns_env)
+      expClasses <- c(expClasses, pClasses[good])
+    }
+    if (length(expClasses)) {
+      missing_classes <- !vapply(expClasses, methods::isClass, NA, where = ns_env)
+      if (any(missing_classes)) {
+        stop(
+          "in package ", pkg_name, " classes ",
+          paste(expClasses[missing_classes], collapse = ", "),
+          " were specified for export but not defined",
+          call. = FALSE
+        )
+      }
+      expClasses <- paste0(methods::classMetaName(""), expClasses)
+    }
+
+    allGenerics <- unique(c(
+      methods:::.getGenerics(ns_env),
+      methods:::.getGenerics(parent.env(ns_env))
+    ))
+    expMethods <- nsInfo$exportMethods
+    addGenerics <- expMethods[is.na(match(expMethods, exports))]
+    if (length(addGenerics)) {
+      have <- vapply(
+        addGenerics,
+        function(w) exists(w, mode = "function", envir = ns_env),
+        NA, USE.NAMES = FALSE
+      )
+      exports <- c(exports, addGenerics[have])
+    }
+    expTables <- character()
+    if (length(allGenerics)) {
+      expMethods <- unique(c(expMethods, exports[!is.na(match(exports, allGenerics))]))
+      tPrefix <- methods:::.TableMetaPrefix()
+      allMethodTables <- unique(c(
+        methods:::.getGenerics(ns_env, tPrefix),
+        methods:::.getGenerics(parent.env(ns_env), tPrefix)
+      ))
+      needMethods <- (exports %in% allGenerics) & !(exports %in% expMethods)
+      if (any(needMethods)) expMethods <- c(expMethods, exports[needMethods])
+      # Methods on primitive generics (e.g. `[`, `length`) are exportable even
+      # when not listed in exportMethods(), so their method tables can reach an
+      # importing package via importMethodsFrom(). Mirrors loadNamespace().
+      pm <- allGenerics[!(allGenerics %in% expMethods)]
+      if (length(pm)) {
+        prim <- vapply(pm, function(pmi) {
+          f <- tryCatch(methods::getFunction(pmi, FALSE, FALSE, ns_env), error = function(e) NULL)
+          !is.null(f) && is.primitive(f)
+        }, logical(1L))
+        expMethods <- c(expMethods, pm[prim])
+      }
+      for (mi in expMethods) {
+        if (!(mi %in% exports) && exists(mi, envir = ns_env, mode = "function", inherits = FALSE)) {
+          exports <- c(exports, mi)
+        }
+        ii <- grep(paste0(tPrefix, mi, ":"), allMethodTables, fixed = TRUE)
+        if (length(ii)) expTables <- c(expTables, allMethodTables[ii[1L]])
+      }
+    }
+    exports <- c(exports, expClasses, expTables)
+  }
+
+  # Internal namespace objects must never be exported, even when an
+  # exportPattern() happens to match them. Mirrors base::loadNamespace()'s
+  # stoplist, plus loadfast's own `.__DEVTOOLS__` marker.
+  stoplist <- c(
+    ".__NAMESPACE__.", ".__S3MethodsTable__.", ".__DEVTOOLS__", ".packageName",
+    ".First.lib", ".onLoad", ".onAttach", ".conflicts.OK", ".noGenerics"
+  )
+  exports <- exports[!exports %in% stoplist]
+  exports <- exports[!is.na(exports) & nzchar(exports)]
+  unique(exports)
+}
+
+# Register S3 methods declared via S3method() in NAMESPACE, mirroring the
+# registerS3methods() call inside base::loadNamespace(). Without this, S3
+# dispatch fails for any method not resolvable in the calling frame — notably
+# methods on generics defined in other namespaces (e.g. base's `print`) and
+# methods declared with S3method() but not exported by name.
+.loadfast.register_s3 <- function(s3_methods, pkg_name, ns_env, reset = FALSE) {
+  # registerS3methods() appends its input to the namespace's "S3methods" info
+  # matrix each call. On incremental reloads we re-register to refresh the table
+  # (re-sourced files replace the underlying functions), so reset the matrix
+  # first to avoid unbounded growth and keep it in sync with what is declared.
+  if (isTRUE(reset)) {
+    setNamespaceInfo(ns_env, "S3methods", matrix(NA_character_, 0L, 4L))
+  }
+  if (is.null(s3_methods) || NROW(s3_methods) == 0L) {
+    return(invisible(NULL))
+  }
+  registerS3methods(s3_methods, pkg_name, ns_env)
+  invisible(NULL)
+}
+
+.loadfast.run_hook <- function(hook, ns_env, abs_path, pkg_name) {
+  if (!exists(hook, envir = ns_env, inherits = FALSE)) return(invisible(NULL))
   tryCatch(
-    get(".onLoad", envir = ns_env, inherits = FALSE)(dirname(abs_path), pkg_name),
+    get(hook, envir = ns_env, inherits = FALSE)(dirname(abs_path), pkg_name),
     error = function(e) {
-      warning("Error in .onLoad() for '", pkg_name, "': ", conditionMessage(e), call. = FALSE)
+      warning("Error in ", hook, "() for '", pkg_name, "': ", conditionMessage(e), call. = FALSE)
     }
   )
   invisible(NULL)

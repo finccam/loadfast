@@ -85,3 +85,26 @@ test_that("helper make_test_logger() builds a Logger with one entry", {
   expect_equal(lg$size(), 1L)
   expect_equal(lg$last(), "init")
 })
+
+test_that("S3 methods on base generics dispatch", {
+  temp <- new_temperature(21)
+  expect_output(print(temp), "Temperature: 21 C")
+  expect_equal(format(temp), "21 C")
+  expect_equal(as.character(temp), "21 C")
+  # These tests run inside package:devpackage, where the methods are reachable by
+  # lexical scope, so dispatch alone would pass even if registration were broken.
+  # Assert the base generic's S3 table actually saw the method — that is what the
+  # loader's registerS3methods() call provides and what real dispatch relies on.
+  base_s3 <- get(".__S3MethodsTable__.", envir = asNamespace("base"))
+  expect_true(exists("format.temperature", envir = base_s3, inherits = FALSE))
+})
+
+test_that("S3 methods on a package-defined generic dispatch", {
+  expect_equal(
+    describe_s3(new_temperature(21)),
+    "a temperature of 21 degrees Celsius"
+  )
+  expect_equal(describe_s3(42), "an unknown object")
+  dev_s3 <- get(".__S3MethodsTable__.", envir = asNamespace("devpackage"))
+  expect_true(exists("describe_s3.temperature", envir = dev_s3, inherits = FALSE))
+})
