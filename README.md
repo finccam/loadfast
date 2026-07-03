@@ -33,7 +33,7 @@ loadfast::load_fast("path/to/your/package")
 
 `load_fast()` reads the package name from `DESCRIPTION`, builds a namespace, processes `NAMESPACE` imports, sources `R/` files, attaches the package to the search path, and optionally sources testthat helpers.
 
-It supports packages that rely on standard R namespace behavior, including imports, S4 classes, and R6 classes.
+It supports packages that rely on standard R namespace behavior, including imports, S3 methods (registered via `S3method()`), S4 classes, and R6 classes. Exports declared with `export()`, `exportPattern()`, `exportClasses()`, and `exportMethods()` are all honored, so a `load_fast()`-loaded package can be depended on by another package in the same session.
 
 ### Options
 
@@ -63,15 +63,23 @@ After an incremental reload:
 
 Use `full = TRUE` after deleting files, removing functions, or whenever you need a clean namespace state.
 
-## Known bug: `lazydata` can fail across multiple loaded packages
+## Working across multiple packages
 
-There is a known compatibility bug when multiple packages are loaded in the same R session with `loadfast` and one package calls code from another package.
+`load_fast()` can load several interdependent packages in the same session: load
+the dependency first, then the packages that import from it. Because each
+namespace is built with the same metadata a real installed package has
+(including the `lazydata` field, S3 method tables, and full export
+processing), cross-package access works — whether through `importFrom()`,
+`import()`, `pkg::name`, S3 dispatch, or `importClassesFrom()` /
+`importMethodsFrom()`.
 
-In particular, when package `A` is loaded and package `B` is then loaded, calling a function from `B` that depends on `A` can fail with:
+As with `devtools::load_all()`, a package imports its dependencies' symbols as a
+snapshot taken at its own load time. After editing a dependency, reload the
+dependency **and** the packages that import from it so the importers pick up the
+change.
 
-```r
-Error in function_in_a() : object 'lazydata' not found
-```
+> Earlier versions failed here with `Error: object 'lazydata' not found` when a
+> loaded package was accessed with `::`. That is fixed.
 
 ## Editor setup
 

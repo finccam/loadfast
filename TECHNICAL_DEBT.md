@@ -7,6 +7,12 @@ This document tracks known implementation debt and conscious tradeoffs in the `l
 - The package implementation under `R/` passes the current repo test suite.
 - The loader design is broadly sound for the target use case.
 - Most debt is in edge-case correctness and maintainability rather than basic functionality.
+- Namespace fidelity has been brought in line with `loadNamespace()` for the
+  areas that affect real packages and multi-package sessions: S3 method
+  registration (`S3method()`), full export processing (`export()`,
+  `exportPattern()`, `exportClasses()`, `exportMethods()`), the `lazydata` /
+  `nativeRoutines` namespace-info fields, and the `.onAttach` hook. See the
+  namespace-machinery notes in `AGENTS.md`.
 
 ## Medium-priority debt
 
@@ -45,8 +51,6 @@ If the `Package:` field in `DESCRIPTION` changes in place for the same directory
 
 **Priority**
 - Medium
-
-## Low-priority debt
 
 ## Low-priority debt
 
@@ -96,7 +100,22 @@ When `renv.lock` changes, incremental reload continues to warn on later calls un
 
 This is intentional and tested. It favors making dependency drift obvious over silently accepting a new lockfile baseline.
 
-### 3. `Collate` support is intentionally narrow
+### 3. Incremental reload does not re-read `NAMESPACE`
+The incremental path only re-sources changed `R/` files. It does not re-parse
+`NAMESPACE`, so imports and the *set* of exports/`S3method()` declarations are
+fixed at the initial full load. Editing a function body is picked up
+incrementally (and S3 method tables are rebuilt so re-sourced methods take
+effect), but **adding** a new `export()`, `S3method()`, or `importFrom()` needs
+`full = TRUE`.
+
+This mirrors the existing treatment of imports and matches the "use `full =
+TRUE` after structural changes" guidance. Re-parsing `NAMESPACE` every call was
+not worth the cost for the edit-reload loop.
+
+**Current rule**
+- Use `full = TRUE` after editing `NAMESPACE` (new exports, S3 methods, imports)
+
+### 4. `Collate` support is intentionally narrow
 The loader now respects the `Collate` field from `DESCRIPTION` when ordering `R/*.R` files, and this behavior is covered by the test suite.
 
 This is still intentionally lightweight rather than a full reproduction of every package-loading edge case. Future changes should preserve the current `Collate` behavior without overcomplicating the package implementation.

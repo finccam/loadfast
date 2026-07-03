@@ -17,10 +17,12 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - **`test_loadfast.R`** is the single custom test runner. It sources `R/loadfast.R` directly and remains the single command users run.
 - **`devpackage/`** is the single frozen baseline package snapshot used by the tests. Contains `DESCRIPTION`, `NAMESPACE`, `R/` (source files), and `tests/testthat/` (testthat tests + helpers). Package name is `devpackage`. All code mutations for reload/incremental testing are applied ad-hoc to temp copies at test time.
   - `R/base.R` — plain functions (`add`, `scale_vector`, `summarize_values`, `mutate_dt`) — `mutate_dt` exercises `data.table`'s `:=` and `as.data.table` via `importFrom`
+  - `R/s3_classes.R` — S3 constructor (`new_temperature`), a package-defined generic (`describe_s3`), and methods on both base generics (`print`/`format`/`as.character`) and the local generic. Registered via `S3method()` in NAMESPACE, none exported by name — so dispatch depends on the loader populating the S3 methods table.
   - `R/s4_classes.R` — S4 classes (`Animal`, `Pet`), generics, methods
   - `R/r6_classes.R` — R6 classes (`Logger`, `Counter`)
   - `tests/testthat/helper-utils.R` — testthat helper factories (`make_test_animal`, `make_test_logger`)
   - `tests/testthat/test-base.R` — testthat tests exercising all of the above
+  - NAMESPACE exercises `export()`, `importFrom()`, `import(methods)`, and `S3method()`. `test_loadfast.R` also builds ad-hoc packages that use `exportPattern()`, `exportClasses()`, and `exportMethods()`.
 - **`renv/`** and **`renv.lock`** manage the project-local library. Key packages: `testthat`, `R6`, `rlang`, `data.table`.
 - **`TECHNICAL_DEBT.md`** tracks known loader tradeoffs, risks, and cleanup opportunities. Update it when you identify a non-trivial issue that is worth preserving across sessions. Use reload-registration terminology in docs and guidance rather than cache-invalidation terminology when describing the user-facing behavior.
 - **`pkgload/`** and **`devtools`** contains the original pkgload & devtools R package source code (moved here for reference). It is NOT used at runtime (and gitignored). Can be initally cloned with `just setup`.
@@ -53,15 +55,16 @@ This `AGENT.md` file is read by every agent session. !!!Keep them high-signal!!!
 - `testthat::test_dir()` runs only once (Stage 1, against the frozen `devpackage/` snapshot). Subsequent stages verify behavior via `check()` assertions, which already cover everything the testthat suite tests.
 - **`on.exit()` cannot be used at the top level of `test_loadfast.R`** for suite-wide cleanup because the file is executed as a script and the suite manages temp directories explicitly through `.tmp_dirs`.
 - **Test stages** (all in `test_loadfast.R`):
-  - **Stage 1**: Load frozen `devpackage/` from its original location. Full checks (namespace, imports, S4, R6, data.table, testthat helpers) + `test_dir()` run.
-  - **Stage 2**: Copy `devpackage/` to a temp dir, apply mutations via `writeLines()` (changed function behavior, new S4 slots, new R6 methods, updated testthat helpers), load, verify all changed behavior. The mutations change behavior across all three class systems (plain functions, S4, R6) so the reload path is exercised for each.
+  - **Stage 1**: Load frozen `devpackage/` from its original location. Full checks (namespace, imports, S3, S4, R6, data.table, testthat helpers) + `test_dir()` run.
+  - **Stage 2**: Copy `devpackage/` to a temp dir, apply mutations via `writeLines()` (changed function behavior, new S4 slots, new R6 methods, updated testthat helpers), load, verify all changed behavior. The mutations change behavior across the class systems (plain functions, S4, R6) so the reload path is exercised for each.
   - **Stage 3**: Copy `devpackage/` to a second temp dir, test cross-file dependencies:
     - 3a: `compute()` in `wrappers.R` calls `add()` from `base.R` — change only `base.R`, verify `compute()` output changes.
     - 3b: `describe_loud()` in `wrappers.R` calls `describe()` generic from `s4_classes.R` — change only the method, verify `describe_loud()` output changes. Also tests `callNextMethod` chain for `Pet`.
     - 3c: `make_animal()` in `wrappers.R` calls `new("Animal",...)` — add `age` slot to the class in `s4_classes.R`, verify the unchanged constructor returns an object with the new slot.
     - 3d: add a `Collate` field plus deliberately misordered filenames, then verify the loader respects `Collate` ordering rather than plain alphabetical order.
-  - **Stage 4**: Copy `devpackage/` to a third temp dir, test incremental-specific behaviors: no-change short-circuit, function removal (stale symbols linger), function addition, function modification, new file, file deletion, explicit file reload registration, failed incremental reload recovery, runtime S4 method patch reload registration, and persistent `renv.lock` change warnings. Verifies that `full = TRUE` properly cleans up stale symbols.
-- Stage 2 always triggers a full load (different path from Stage 1 = cache miss). Stage 3 exercises the incremental path for `load_fast()` on a stable temp path while mutating files in place.
+  - **Stage 4**: Copy `devpackage/` to a third temp dir, test incremental-specific behaviors: no-change short-circuit, function removal (stale symbols linger), function addition, function modification, new file, file deletion, explicit file reload registration, failed incremental reload recovery, runtime S4 method patch reload registration, persistent `renv.lock` change warnings, `.onLoad`/`.onAttach` hook execution (4l), and S3 method table refresh on incremental reload (4m). Verifies that `full = TRUE` properly cleans up stale symbols.
+  - **Stage 5**: Build ad-hoc packages (distinct class names, so nothing collides) to test cross-package fidelity: `exportPattern()` populating exports and `pkg::fn` resolving (5a), `pkg::missing` giving a proper not-exported error rather than the `lazydata` internal (5b), S3 dispatch across package boundaries for both base and package-defined generics (5c), and `exportClasses()`/`exportMethods()` + `importClassesFrom()`/`importMethodsFrom()` for S4 (5d).
+- Stage 2 always triggers a full load (different path from Stage 1 = cache miss). Stage 3 exercises the incremental path for `load_fast()` on a stable temp path while mutating files in place. The multi-package stages (3e, 3h) call `strip_s3_fixture()` on their copies so the shared `temperature` S3 fixture from the baseline does not register colliding methods across renamed packages.
 
 ## R namespace machinery gotchas
 
@@ -99,6 +102,18 @@ These base R functions place objects into the **parent** of the namespace env (t
 
 ### Imported symbols must be copied to the attached package env
 `namespaceImportFrom` places symbols in the imports env (parent of ns_env). Code *inside* the namespace finds them via the parent chain, but they are not in `ls(ns_env)`. To make them available for interactive use on the search path (matching `devtools::load_all()` behavior), the loaders also copy all symbols from the imports env into the `package:` env.
+
+### S3 methods must be registered, not just sourced (`.loadfast.register_s3`)
+Sourcing `print.foo` into `ns_env` is **not enough** for S3 dispatch, even though the loader also copies it onto the search path. `UseMethod()` resolves a method by searching the calling frame and then the `.__S3MethodsTable__.` of the generic's defining namespace — it does **not** walk the attached search path. So a method registered with `S3method()` but not exported by name (the roxygen default) never dispatches unless the table is populated. The loader calls base's (unexported) `registerS3methods(nsInfo$S3methods, pkg, ns_env)`, exactly like `loadNamespace()`: methods on **local** generics are copied into the package's own table; methods on **foreign** generics (e.g. base `print`) are registered into *that* package's table (or delayed via a load hook). On incremental reload the table is rebuilt (`reset = TRUE`) because re-sourcing replaces the underlying functions and `registerS3methods()` otherwise appends to the `"S3methods"` info matrix on every call.
+
+### Exports are more than `export()` (`.loadfast.compute_exports`)
+`export()` alone misses the common cases. The loader mirrors `loadNamespace()`'s export computation: `exportPattern()` (expanded via `ls(ns_env, pattern=)`), and for S4 packages `exportClasses()`/`exportClassPattern()` (exported as `.__C__<class>` metadata objects) and `exportMethods()` (the generic plus its `.__T__<generic>:<pkg>` method table). `methods::cacheMetaData()` is called for S4 packages. Without this, `exportPattern` packages expose **nothing** (so `pkg::fn` fails) and `importClassesFrom()`/`importMethodsFrom()` from another package error with *"class/method not exported"*.
+
+### `.__NAMESPACE__.` must include `lazydata` (and `nativeRoutines`)
+`makeNamespace()` seeds these fields at namespace creation; the inline replica must too. `pkg::name` goes through `getExportedValue()` → `.Internal(getNamespaceValue())`, which falls back to `getNamespaceInfo(ns, "lazydata")` for any name not in `exports`. If the field is missing, that read throws the infamous *"object 'lazydata' not found"* instead of a proper *"not an exported object"* error. `lazydata` is an env named `lazydata:<pkg>`; `nativeRoutines` is `list()`. `DLLs` is intentionally omitted (pure-R packages don't have it).
+
+### `.onAttach` is an attach-time hook
+`.onLoad` runs on every (full and incremental) load; `.onAttach` runs only on the full load, right after the package env is attached to the search path — matching `library()`/`load_all()`, since incremental reloads never re-attach. Both go through `.loadfast.run_hook(hook, ...)`.
 
 ## System-specific notes
 
