@@ -1,6 +1,6 @@
 Package: loadfast
 Title: Fast Incremental Package Loader for Interactive Development
-Version: 0.0.1
+Version: 1.0.0
 Authors@R: person(given = "Finccam", family = "Team", email = "engineering@finccam.com", role = c("aut", "cre"))
 Description: Fast incremental reloading for interactive development on large
     R packages. Intended for edit-reload-test workflows where
@@ -12,9 +12,12 @@ Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Imports:
-    rlang
-DevDeps:
-    testthat,
-    R6,
+    methods,
+    tools
+Suggests:
     data.table,
-    digest
+    digest,
+    pkgload,
+    R6,
+    rlang,
+    testthat
