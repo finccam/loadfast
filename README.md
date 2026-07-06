@@ -12,7 +12,7 @@ For a given package path, `loadfast` performs a full load on the first call, the
 
 `loadfast` is intended for the edit-reload-test loop, not as a general replacement for `devtools::load_all()`. The main tradeoff is described in [Important limitation: incremental reload does not clean up stale symbols](#important-limitation-incremental-reload-does-not-clean-up-stale-symbols).
 
-At runtime, `loadfast` does not depend on `pkgload` or `devtools`. Its main runtime dependency is `rlang`.
+At runtime, `loadfast` depends only on base R (plus the bundled `methods` and `tools` packages) — not on `pkgload`, `devtools`, or `rlang`.
 
 ## Installation
 

@@ -2,6 +2,26 @@
 .loadfast.state <- new.env(parent = emptyenv())
 .loadfast.state$stack <- character(0)
 
+# R's namespace registry has no public API for dev loaders: the base wrappers
+# around registerNamespace/unregisterNamespace are not exported, and rlang's
+# ns_registry_env() is defunct as of rlang 1.2.0. Construct the .Internal()
+# calls at runtime instead -- the same approach current pkgload uses.
+.loadfast.ns_register <- function(name, env) {
+  eval(as.call(list(
+    quote(.Internal),
+    as.call(list(quote(registerNamespace), name, env))
+  )))
+  invisible(env)
+}
+
+.loadfast.ns_unregister <- function(name) {
+  eval(as.call(list(
+    quote(.Internal),
+    as.call(list(quote(unregisterNamespace), name))
+  )))
+  invisible(NULL)
+}
+
 .onAttach <- function(libname, pkgname) {
   packageStartupMessage("Incremental reload is available via load_fast().")
 }
@@ -395,8 +415,10 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   ns_env[[".__S3MethodsTable__."]] <- new.env(hash = TRUE, parent = baseenv())
   ns_env[[".__DEVTOOLS__"]] <- new.env(parent = ns_env)
 
-  reg <- rlang::ns_registry_env()
-  reg[[pkg_name]] <- ns_env
+  if (isNamespaceLoaded(pkg_name)) {
+    .loadfast.ns_unregister(pkg_name)
+  }
+  .loadfast.ns_register(pkg_name, ns_env)
 
   # If the load fails from here on (bad source file, failed import), do not
   # leave a half-built namespace registered or attached: the next call would
@@ -412,10 +434,9 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
             error = function(e) NULL
           )
         }
-        cleanup_reg <- rlang::ns_registry_env()
-        if (exists(pkg_name, envir = cleanup_reg, inherits = FALSE) &&
-            identical(cleanup_reg[[pkg_name]], ns_env)) {
-          rm(list = pkg_name, envir = cleanup_reg)
+        if (isNamespaceLoaded(pkg_name) &&
+            identical(tryCatch(asNamespace(pkg_name), error = function(e) NULL), ns_env)) {
+          tryCatch(.loadfast.ns_unregister(pkg_name), error = function(e) NULL)
         }
       }
     },
@@ -822,9 +843,8 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
           }
         )
       }
-      reg <- rlang::ns_registry_env()
-      if (exists(pkg_name, envir = reg, inherits = FALSE)) {
-        rm(list = pkg_name, envir = reg)
+      if (isNamespaceLoaded(pkg_name)) {
+        tryCatch(.loadfast.ns_unregister(pkg_name), error = function(e2) NULL)
       }
     })
   }

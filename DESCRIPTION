@@ -13,11 +13,11 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Imports:
     methods,
-    rlang,
     tools
 Suggests:
     data.table,
     digest,
     pkgload,
     R6,
+    rlang,
     testthat

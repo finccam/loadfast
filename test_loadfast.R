@@ -243,9 +243,9 @@ check("Imports env parent is .BaseNamespaceEnv", quote(
   identical(parent.env(impenv), .BaseNamespaceEnv)
 ))
 
-# --- importFrom(rlang, ns_registry_env) ---
-check("ns_registry_env is in imports env", quote(
-  exists("ns_registry_env", envir = impenv, inherits = FALSE)
+# --- importFrom(rlang, abort) ---
+check("abort (importFrom rlang) is in imports env", quote(
+  exists("abort", envir = impenv, inherits = FALSE)
 ))
 
 # --- import(methods) ---
@@ -1400,7 +1400,7 @@ rename_package(tmp_order_b, "ordbpkg")
 
 writeLines(c(
   "export(add)",
-  "importFrom(rlang, ns_registry_env)",
+  "importFrom(rlang, abort)",
   "import(methods)",
   "importFrom(R6, R6Class)",
   "importFrom(data.table,\":=\")",
@@ -1412,7 +1412,7 @@ replace_namespace_imports(
   file.path(tmp_order_b, "NAMESPACE"),
   c(
     "importFrom(ordapkg,add)",
-    "importFrom(rlang, ns_registry_env)",
+    "importFrom(rlang, abort)",
     "import(methods)",
     "importFrom(R6, R6Class)",
     "importFrom(data.table,\":=\")",
