@@ -92,7 +92,9 @@ test_that("load_fast() rejects paths outside a package", {
   on.exit(unlink(bare, recursive = TRUE))
 
   expect_error(load_fast(bare), "Could not find package root")
-  expect_error(load_fast(file.path(bare, "nope")), "No such file|cannot be found|does not exist")
+  # normalizePath(mustWork = TRUE) wording differs by OS ("No such file or
+  # directory" on unix, "The system cannot find the file specified" on Windows).
+  expect_error(load_fast(file.path(bare, "nope")), "No such file|cannot find|does not exist")
 })
 
 test_that("load_fast() validates the DESCRIPTION Package field", {
@@ -115,7 +117,7 @@ test_that("load_fast_register_reload() validates its inputs", {
 
   expect_error(
     load_fast_register_reload(root, files = file.path(tempdir(), "elsewhere.R")),
-    "No such file|cannot be found|must be inside"
+    "No such file|cannot find|must be inside"
   )
 
   expect_message(
