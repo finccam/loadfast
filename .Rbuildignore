@@ -1,2 +1,12 @@
 ^renv$
 ^renv\.lock$
+^\.Rprofile$
+^\.github$
+^\.gitignore$
+^test_loadfast\.R$
+^devpackage$
+^AGENTS\.md$
+^TECHNICAL_DEBT\.md$
+^justfile$
+^pkgload$
+^devtools$

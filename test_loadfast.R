@@ -2415,6 +2415,480 @@ check("xpkg-s4: consumer dispatches an imported primitive-generic S4 method", qu
 ))
 
 # ============================================================================
+# STAGE 6: Multi-package dependency invalidation and convergence
+#   When a package is reloaded, cached packages that import from it (directly
+#   or transitively) must be flagged and their next load upgraded to a full
+#   reload; a full reload must also reload flagged dependencies first.
+# ============================================================================
+cat("\n--- Stage 6: multi-package dependency invalidation ---\n\n")
+
+# --- 6a: direct importer is auto-upgraded to a full reload ---
+cat("\n--- 6a: direct importer invalidation ---\n\n")
+
+tmp_inv_a <- tempfile("loadfast_inv_a_")
+tmp_inv_b <- tempfile("loadfast_inv_b_")
+write_pkg(
+  tmp_inv_a, "invdep",
+  desc_extra = character(0),
+  ns_lines = "export(inv_value)",
+  r_files = list("a.R" = 'inv_value <- function() "one"')
+)
+write_pkg(
+  tmp_inv_b, "invuser",
+  desc_extra = character(0),
+  ns_lines = c("importFrom(invdep, inv_value)", "export(inv_wrap)"),
+  r_files = list("b.R" = 'inv_wrap <- function() paste0("wrapped:", inv_value())')
+)
+invisible(load_fast(tmp_inv_a, helpers = FALSE, attach_testthat = FALSE))
+ns_inv_b <- load_fast(tmp_inv_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("inv-direct: importer works before dependency change", quote(
+  get("inv_wrap", envir = ns_inv_b)() == "wrapped:one"
+))
+
+writeLines('inv_value <- function() "two"', file.path(tmp_inv_a, "R", "a.R"))
+invisible(load_fast(tmp_inv_a, helpers = FALSE, attach_testthat = FALSE))
+
+check("inv-direct: dependency itself is fresh after incremental reload", quote(
+  getExportedValue("invdep", "inv_value")() == "two"
+))
+
+check("inv-direct: importer is stale until it reloads (snapshot semantics)", quote(
+  get("inv_wrap", envir = ns_inv_b)() == "wrapped:one"
+))
+
+inv_b_reload <- capture_messages(
+  load_fast(tmp_inv_b, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("inv-direct: importer load is auto-upgraded to a full reload", quote(
+  any(grepl("Full reload of 'invuser': dependency 'invdep' was reloaded", inv_b_reload$messages, fixed = TRUE))
+))
+
+check("inv-direct: importer sees the new dependency value", quote(
+  get("inv_wrap", envir = inv_b_reload$value)() == "wrapped:two"
+))
+
+inv_b_again <- capture_messages(
+  load_fast(tmp_inv_b, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("inv-direct: importer short-circuits again after the forced full reload", quote(
+  any(grepl("No changes", inv_b_again$messages, fixed = TRUE))
+))
+
+# --- 6b: transitive chain converges with a single load of the top package ---
+cat("\n--- 6b: transitive chain convergence ---\n\n")
+
+tmp_inv_c <- tempfile("loadfast_inv_c_")
+write_pkg(
+  tmp_inv_c, "invtop",
+  desc_extra = character(0),
+  ns_lines = c("importFrom(invuser, inv_wrap)", "export(inv_top)"),
+  r_files = list("c.R" = 'inv_top <- function() paste0("top:", inv_wrap())')
+)
+ns_inv_c <- load_fast(tmp_inv_c, helpers = FALSE, attach_testthat = FALSE)
+
+check("inv-chain: top of the chain works initially", quote(
+  get("inv_top", envir = ns_inv_c)() == "top:wrapped:two"
+))
+
+writeLines('inv_value <- function() "three"', file.path(tmp_inv_a, "R", "a.R"))
+invisible(load_fast(tmp_inv_a, helpers = FALSE, attach_testthat = FALSE))
+
+inv_c_reload <- capture_messages(
+  load_fast(tmp_inv_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("inv-chain: transitive importer is flagged too", quote(
+  any(grepl("Full reload of 'invtop'", inv_c_reload$messages))
+))
+
+check("inv-chain: flagged middle dependency is reloaded first", quote(
+  any(grepl("Reloading dependency 'invuser' first", inv_c_reload$messages))
+))
+
+check("inv-chain: one load of the top package converges the whole chain", quote(
+  get("inv_top", envir = inv_c_reload$value)() == "top:wrapped:three"
+))
+
+check("inv-chain: middle package is fresh as well", quote(
+  getExportedValue("invuser", "inv_wrap")() == "wrapped:three"
+))
+
+# --- 6c: no-change loads do not invalidate dependents ---
+cat("\n--- 6c: no-change loads do not invalidate ---\n\n")
+
+invisible(load_fast(tmp_inv_a, helpers = FALSE, attach_testthat = FALSE))
+inv_c_nochange <- capture_messages(
+  load_fast(tmp_inv_c, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("inv-nochange: importer short-circuits after a no-change dependency load", quote(
+  any(grepl("No changes", inv_c_nochange$messages, fixed = TRUE))
+))
+
+# --- 6d: whole-namespace import() is invalidated too ---
+cat("\n--- 6d: whole-namespace import() invalidation ---\n\n")
+
+tmp_wns_a <- tempfile("loadfast_wns_a_")
+tmp_wns_b <- tempfile("loadfast_wns_b_")
+write_pkg(
+  tmp_wns_a, "wnsdep",
+  desc_extra = character(0),
+  ns_lines = "export(wns_value)",
+  r_files = list("a.R" = 'wns_value <- function() 1')
+)
+write_pkg(
+  tmp_wns_b, "wnsuser",
+  desc_extra = character(0),
+  ns_lines = c("import(wnsdep)", "export(wns_wrap)"),
+  r_files = list("b.R" = 'wns_wrap <- function() wns_value() + 100')
+)
+invisible(load_fast(tmp_wns_a, helpers = FALSE, attach_testthat = FALSE))
+ns_wns_b <- load_fast(tmp_wns_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("inv-import: whole-namespace importer works initially", quote(
+  get("wns_wrap", envir = ns_wns_b)() == 101
+))
+
+writeLines('wns_value <- function() 2', file.path(tmp_wns_a, "R", "a.R"))
+invisible(load_fast(tmp_wns_a, helpers = FALSE, attach_testthat = FALSE))
+ns_wns_b2 <- suppressMessages(load_fast(tmp_wns_b, helpers = FALSE, attach_testthat = FALSE))
+
+check("inv-import: whole-namespace importer picks up the change", quote(
+  get("wns_wrap", envir = ns_wns_b2)() == 102
+))
+
+# --- 6e: S4 class redefinition in a dependency propagates to importers ---
+cat("\n--- 6e: S4 class redefinition across packages ---\n\n")
+
+tmp_s4x_a <- tempfile("loadfast_s4x_a_")
+tmp_s4x_b <- tempfile("loadfast_s4x_b_")
+write_pkg(
+  tmp_s4x_a, "s4xdep",
+  desc_extra = character(0),
+  ns_lines = c("import(methods)", "exportClasses(Rotor)", "export(make_rotor)"),
+  r_files = list("a.R" = c(
+    'setClass("Rotor", representation(blades = "numeric"))',
+    'make_rotor <- function(n) new("Rotor", blades = n)'
+  ))
+)
+write_pkg(
+  tmp_s4x_b, "s4xuser",
+  desc_extra = character(0),
+  ns_lines = c(
+    "import(methods)", "importClassesFrom(s4xdep, Rotor)",
+    "importFrom(s4xdep, make_rotor)", "export(rotor_slots)"
+  ),
+  r_files = list("b.R" = 'rotor_slots <- function() methods::slotNames(class(make_rotor(2)))')
+)
+invisible(load_fast(tmp_s4x_a, helpers = FALSE, attach_testthat = FALSE))
+ns_s4x_b <- load_fast(tmp_s4x_b, helpers = FALSE, attach_testthat = FALSE)
+
+check("inv-s4: importer sees the original slot set", quote(
+  identical(get("rotor_slots", envir = ns_s4x_b)(), "blades")
+))
+
+writeLines(c(
+  'setClass("Rotor", representation(blades = "numeric", pitch = "numeric"),',
+  '         prototype = list(pitch = 0))',
+  'make_rotor <- function(n) new("Rotor", blades = n)'
+), file.path(tmp_s4x_a, "R", "a.R"))
+invisible(load_fast(tmp_s4x_a, helpers = FALSE, attach_testthat = FALSE))
+ns_s4x_b2 <- suppressMessages(load_fast(tmp_s4x_b, helpers = FALSE, attach_testthat = FALSE))
+
+check("inv-s4: importer sees the redefined class with the new slot", quote(
+  setequal(get("rotor_slots", envir = ns_s4x_b2)(), c("blades", "pitch"))
+))
+
+# --- 6f: full reload of a dependency that cannot be unloadNamespace()d ---
+cat("\n--- 6f: forced unregister path while imported ---\n\n")
+
+tmp_fu_a <- tempfile("loadfast_fu_a_")
+tmp_fu_b <- tempfile("loadfast_fu_b_")
+write_pkg(
+  tmp_fu_a, "fudep",
+  desc_extra = character(0),
+  ns_lines = "export(fu_value)",
+  r_files = list("a.R" = c(
+    'fu_value <- function() "before"',
+    '.onUnload <- function(libpath) assign(".fu_unload_ran", TRUE, envir = globalenv())'
+  ))
+)
+write_pkg(
+  tmp_fu_b, "fuuser",
+  desc_extra = character(0),
+  ns_lines = c("importFrom(fudep, fu_value)", "export(fu_wrap)"),
+  r_files = list("b.R" = 'fu_wrap <- function() fu_value()')
+)
+invisible(load_fast(tmp_fu_a, helpers = FALSE, attach_testthat = FALSE))
+invisible(load_fast(tmp_fu_b, helpers = FALSE, attach_testthat = FALSE))
+
+writeLines(c(
+  'fu_value <- function() "after"',
+  '.onUnload <- function(libpath) assign(".fu_unload_ran", TRUE, envir = globalenv())'
+), file.path(tmp_fu_a, "R", "a.R"))
+
+fu_reload <- capture_warnings(
+  load_fast(tmp_fu_a, helpers = FALSE, attach_testthat = FALSE, full = TRUE)
+)
+
+check("forced-unregister: full reload of an imported dependency succeeds", quote(
+  is.environment(fu_reload$value) && isNamespace(fu_reload$value)
+))
+
+check("forced-unregister: .onUnload ran during the forced teardown", quote(
+  isTRUE(get0(".fu_unload_ran", envir = globalenv()))
+))
+
+check("forced-unregister: :: resolves the fresh namespace", quote(
+  getExportedValue("fudep", "fu_value")() == "after"
+))
+
+fu_user_reload <- suppressMessages(load_fast(tmp_fu_b, helpers = FALSE, attach_testthat = FALSE))
+
+check("forced-unregister: importer converges after its flagged reload", quote(
+  get("fu_wrap", envir = fu_user_reload)() == "after"
+))
+
+# ============================================================================
+# STAGE 7: Production hardening
+#   Depends attachment, rename-in-place cleanup, failed-load cleanup,
+#   namespace version fidelity, Collate-aware incremental ordering,
+#   re-entrance guard, and verbose logging.
+# ============================================================================
+cat("\n--- Stage 7: production hardening ---\n\n")
+
+# --- 7a: Depends packages are attached during a full load ---
+cat("\n--- 7a: Depends attachment ---\n\n")
+
+if ("package:tools" %in% search()) detach("package:tools")
+tmp_dep <- tempfile("loadfast_depends_")
+write_pkg(
+  tmp_dep, "dependspkg",
+  desc_extra = c("Depends:", "    R (>= 4.0),", "    tools"),
+  ns_lines = "export(depends_md5)",
+  r_files = list("a.R" = 'depends_md5 <- function(f) md5sum(f)')
+)
+ns_dep7 <- load_fast(tmp_dep, helpers = FALSE, attach_testthat = FALSE)
+
+check("depends: package in Depends is attached to the search path", quote(
+  "package:tools" %in% search()
+))
+
+check("depends: package code can call Depends symbols unqualified", quote(
+  !is.na(get("depends_md5", envir = ns_dep7)(file.path(tmp_dep, "DESCRIPTION")))
+))
+
+tmp_dep_missing <- tempfile("loadfast_depends_missing_")
+write_pkg(
+  tmp_dep_missing, "dependsmissing",
+  desc_extra = "Depends: surelynotarealinstalledpackage",
+  ns_lines = "export(dm)",
+  r_files = list("a.R" = 'dm <- function() 1')
+)
+depends_missing_err <- tryCatch(
+  load_fast(tmp_dep_missing, helpers = FALSE, attach_testthat = FALSE),
+  error = function(e) e
+)
+
+check("depends: missing Depends package fails with a clear error", quote(
+  inherits(depends_missing_err, "error") &&
+    grepl("Depends package 'surelynotarealinstalledpackage'", conditionMessage(depends_missing_err), fixed = TRUE)
+))
+
+# --- 7b: renaming the package in DESCRIPTION cleans up the old identity ---
+cat("\n--- 7b: rename-in-place cleanup ---\n\n")
+
+tmp_ren <- tempfile("loadfast_rename_")
+write_pkg(
+  tmp_ren, "renameold",
+  desc_extra = character(0),
+  ns_lines = "export(ren_fn)",
+  r_files = list("a.R" = 'ren_fn <- function() 1')
+)
+invisible(load_fast(tmp_ren, helpers = FALSE, attach_testthat = FALSE))
+
+check("rename: original name is loaded", quote(
+  "renameold" %in% loadedNamespaces() && "package:renameold" %in% search()
+))
+
+replace_description_field(file.path(tmp_ren, "DESCRIPTION"), "Package", "Package: renamenew")
+ren_reload <- capture_messages(
+  load_fast(tmp_ren, helpers = FALSE, attach_testthat = FALSE)
+)
+
+check("rename: reload reports the identity change", quote(
+  any(grepl("changed from 'renameold' to 'renamenew'", ren_reload$messages, fixed = TRUE))
+))
+
+check("rename: new name is loaded and attached", quote(
+  "renamenew" %in% loadedNamespaces() && "package:renamenew" %in% search()
+))
+
+check("rename: old namespace is unloaded", quote(
+  !("renameold" %in% loadedNamespaces())
+))
+
+check("rename: old package env is detached", quote(
+  !("package:renameold" %in% search())
+))
+
+# --- 7c: a failed full load leaves no half-built namespace behind ---
+cat("\n--- 7c: failed full load cleanup ---\n\n")
+
+tmp_failfull <- tempfile("loadfast_failfull_")
+write_pkg(
+  tmp_failfull, "failfull",
+  desc_extra = character(0),
+  ns_lines = "export(ff_fn)",
+  r_files = list("a.R" = 'ff_fn <- function() "ok"')
+)
+invisible(load_fast(tmp_failfull, helpers = FALSE, attach_testthat = FALSE))
+writeLines('ff_fn <- function() "broken" (', file.path(tmp_failfull, "R", "a.R"))
+failfull_err <- tryCatch(
+  load_fast(tmp_failfull, helpers = FALSE, attach_testthat = FALSE, full = TRUE),
+  error = function(e) e
+)
+
+check("fail-clean: broken full load errors", quote(
+  inherits(failfull_err, "error")
+))
+
+check("fail-clean: no half-built namespace stays registered", quote(
+  !("failfull" %in% loadedNamespaces())
+))
+
+check("fail-clean: no half-built package env stays attached", quote(
+  !("package:failfull" %in% search())
+))
+
+writeLines('ff_fn <- function() "fixed"', file.path(tmp_failfull, "R", "a.R"))
+ns_failfull <- load_fast(tmp_failfull, helpers = FALSE, attach_testthat = FALSE)
+
+check("fail-clean: recovery load works after fixing the file", quote(
+  get("ff_fn", envir = ns_failfull)() == "fixed"
+))
+
+# --- 7d: namespace version comes from DESCRIPTION ---
+cat("\n--- 7d: namespace version fidelity ---\n\n")
+
+tmp_ver <- tempfile("loadfast_version_")
+write_pkg(
+  tmp_ver, "versionpkg",
+  desc_extra = character(0),
+  ns_lines = "export(v_fn)",
+  r_files = list("a.R" = 'v_fn <- function() 1')
+)
+replace_description_field(file.path(tmp_ver, "DESCRIPTION"), "Version", "Version: 2.5.1")
+invisible(load_fast(tmp_ver, helpers = FALSE, attach_testthat = FALSE))
+
+check("version: getNamespaceVersion() reflects DESCRIPTION", quote(
+  as.character(getNamespaceVersion("versionpkg")) == "2.5.1"
+))
+
+# --- 7e: incremental re-sourcing respects Collate order ---
+cat("\n--- 7e: Collate order on incremental reload ---\n\n")
+
+tmp_coll_incr <- tempfile("loadfast_collate_incr_")
+write_pkg(
+  tmp_coll_incr, "collateincr",
+  desc_extra = c("Collate:", "    'zzz_first.R'", "    'aaa_second.R'"),
+  ns_lines = "export(collate_order)",
+  r_files = list(
+    "zzz_first.R" = c(
+      ".load_order <- c(get0('.load_order', ifnotfound = NULL), 'first')",
+      "collate_order <- function() .load_order"
+    ),
+    "aaa_second.R" = ".load_order <- c(get0('.load_order', ifnotfound = NULL), 'second')"
+  )
+)
+ns_coll <- load_fast(tmp_coll_incr, helpers = FALSE, attach_testthat = FALSE)
+
+check("collate-incr: full load follows Collate order", quote(
+  identical(get("collate_order", envir = ns_coll)(), c("first", "second"))
+))
+
+# Touch both files so the incremental path re-sources them together; the
+# re-source order must still follow Collate, not alphabetical basenames.
+writeLines(c(
+  ".load_order <- c(get0('.load_order', ifnotfound = NULL), 'first')",
+  "collate_order <- function() .load_order",
+  "# touched"
+), file.path(tmp_coll_incr, "R", "zzz_first.R"))
+writeLines(c(
+  ".load_order <- c(get0('.load_order', ifnotfound = NULL), 'second')",
+  "# touched"
+), file.path(tmp_coll_incr, "R", "aaa_second.R"))
+
+ns_coll2 <- load_fast(tmp_coll_incr, helpers = FALSE, attach_testthat = FALSE)
+coll_order_after <- get("collate_order", envir = ns_coll2)()
+
+check("collate-incr: incremental re-source follows Collate order", quote(
+  identical(coll_order_after[c(length(coll_order_after) - 1L, length(coll_order_after))], c("first", "second"))
+))
+
+# --- 7f: re-entrance guard ---
+cat("\n--- 7f: re-entrance guard ---\n\n")
+
+tmp_reent <- tempfile("loadfast_reentrance_")
+write_pkg(
+  tmp_reent, "reentrance",
+  desc_extra = character(0),
+  ns_lines = "export(re_fn)",
+  r_files = list("a.R" = c(
+    "re_fn <- function() 1",
+    "load_fast('.')"
+  ))
+)
+reent_err <- tryCatch(
+  load_fast(tmp_reent, helpers = FALSE, attach_testthat = FALSE),
+  error = function(e) e
+)
+
+check("re-entrance: sourced file calling load_fast() errors", quote(
+  inherits(reent_err, "error")
+))
+
+check("re-entrance: error message mentions re-entrance", quote(
+  grepl("re-entrance", conditionMessage(reent_err), fixed = TRUE)
+))
+
+check("re-entrance: loader state recovers for subsequent loads", quote({
+  writeLines("re_fn <- function() 1", file.path(tmp_reent, "R", "a.R"))
+  ns_re <- load_fast(tmp_reent, helpers = FALSE, attach_testthat = FALSE)
+  get("re_fn", envir = ns_re)() == 1
+}))
+
+# --- 7g: verbose mode emits per-phase timings ---
+cat("\n--- 7g: verbose timing logs ---\n\n")
+
+tmp_verb <- tempfile("loadfast_verbose_")
+write_pkg(
+  tmp_verb, "verbosepkg",
+  desc_extra = character(0),
+  ns_lines = "export(vb_fn)",
+  r_files = list("a.R" = 'vb_fn <- function() 1')
+)
+verbose_load <- capture_messages(
+  load_fast(tmp_verb, helpers = FALSE, attach_testthat = FALSE, verbose = TRUE)
+)
+
+check("verbose: full load emits [load_fast] phase timings", quote(
+  any(grepl("[load_fast]", verbose_load$messages, fixed = TRUE)) &&
+    any(grepl("TOTAL (full load)", verbose_load$messages, fixed = TRUE))
+))
+
+verbose_nochange <- capture_messages(
+  load_fast(tmp_verb, helpers = FALSE, attach_testthat = FALSE, verbose = TRUE)
+)
+
+check("verbose: no-change load emits timing summary", quote(
+  any(grepl("TOTAL (no-change)", verbose_nochange$messages, fixed = TRUE))
+))
+
+# ============================================================================
 # Summary
 # ============================================================================
 cat("\n")

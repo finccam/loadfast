@@ -4,84 +4,41 @@ This document tracks known implementation debt and conscious tradeoffs in the `l
 
 ## Current status
 
-- The package implementation under `R/` passes the current repo test suite.
-- The loader design is broadly sound for the target use case.
-- Most debt is in edge-case correctness and maintainability rather than basic functionality.
-- Namespace fidelity has been brought in line with `loadNamespace()` for the
-  areas that affect real packages and multi-package sessions: S3 method
-  registration (`S3method()`), full export processing (`export()`,
-  `exportPattern()`, `exportClasses()`, `exportMethods()`), the `lazydata` /
-  `nativeRoutines` namespace-info fields, and the `.onAttach` hook. See the
-  namespace-machinery notes in `AGENTS.md`.
+- The package implementation under `R/` passes the repo harness (`test_loadfast.R`,
+  ~300 checks) and the `testthat` suite that runs under `R CMD check`.
+- `R CMD check --as-cran` is clean apart from two expected NOTEs: the `attach()`
+  call (inherent to a loader that manages the search path) and an
+  environment-specific timestamp note on some machines.
+- Namespace fidelity matches `loadNamespace()` for the areas that affect real
+  packages and multi-package sessions: S3 method registration (`S3method()`),
+  full export processing (`export()`, `exportPattern()`, `exportClasses()`,
+  `exportMethods()`), the `lazydata` / `nativeRoutines` namespace-info fields,
+  the namespace version from `DESCRIPTION`, `Depends` attachment, and the
+  `.onLoad` / `.onAttach` / `.onUnload` hooks. See the namespace-machinery notes
+  in `AGENTS.md`.
 
-## Medium-priority debt
+## Resolved (previously tracked as debt)
 
-### 1. Incremental cache validity is inferred too loosely
-**Why this matters**
+### Incremental cache validity (was medium priority)
+The incremental path verifies that the cached namespace env is identical to the
+currently registered namespace (`asNamespace(pkg)`) and that the package env is
+on the search path. Stale env references after manual unloads fall back to a
+full load.
 
-Incremental reload currently checks whether:
-- a cache entry exists for the normalized path
-- the package name is in `loadedNamespaces()`
-- the attached package env is on the search path
+### Cache keyed only by normalized path (was medium priority)
+Cache entries store `pkg_name`. When the `Package:` field changes in place for
+the same directory, the loader detaches and unloads the old identity, drops the
+stale cache entry, and does a full load under the new name (tested in stage 7b).
 
-That does not fully prove that the cached namespace env is still the active registered namespace for the package.
+### Testthat detection duplication (was low priority)
+Extracted into `.loadfast.uses_testthat()` / `.loadfast.attach_testthat()`.
 
-**Risk**
-- Reusing stale env references after manual unloads or namespace manipulation
-- Hard-to-debug edge cases in interactive sessions
+## Remaining low-priority debt
 
-**Preferred fix**
-- Store `pkg_name` in the cache entry
-- Verify the cached namespace env matches the currently registered namespace before taking the incremental path
-
-**Priority**
-- Medium
-
-### 2. Cache is keyed only by normalized path
-**Why this matters**
-
-If the `Package:` field in `DESCRIPTION` changes in place for the same directory, the path-based cache may no longer describe the same logical package.
-
-**Risk**
-- Mismatch between cached namespace state and current package identity
-
-**Preferred fix**
-- Store `pkg_name` alongside the cache entry
-- Force a full reload when the cached package name differs from the current `DESCRIPTION`
-
-**Priority**
-- Medium
-
-## Low-priority debt
-
-### 3. Testthat detection logic is duplicated
-**Why this matters**
-
-Logic for detecting testthat usage and helper sourcing is repeated in multiple places. The runtime cost is trivial, but the duplication increases maintenance cost.
-
-**Risk**
-- Small drift between code paths
-- Unnecessary repetition in package source that now lives in one canonical implementation file
-
-**Preferred fix**
-- Extract a small helper for detecting whether testthat helpers should be considered available
-
-**Priority**
-- Low
-
-### 4. Package env sync logic is duplicated conceptually
-**Why this matters**
-
-The full-load and incremental-load paths both bulk-copy namespace and imports into the attached package env. The duplication is reasonable, but it is a maintenance seam.
-
-**Risk**
-- Future edits may update one path but not the other
-
-**Preferred fix**
-- Optionally extract a small helper for package env synchronization
-
-**Priority**
-- Low
+### Package env sync logic is duplicated conceptually
+The full-load and incremental-load paths both bulk-copy namespace and imports
+into the attached package env. The duplication is reasonable, but it is a
+maintenance seam. Optionally extract a small helper if the file grows further.
 
 ## Conscious tradeoffs, not bugs
 
@@ -116,7 +73,9 @@ not worth the cost for the edit-reload loop.
 - Use `full = TRUE` after editing `NAMESPACE` (new exports, S3 methods, imports)
 
 ### 4. `Collate` support is intentionally narrow
-The loader now respects the `Collate` field from `DESCRIPTION` when ordering `R/*.R` files, and this behavior is covered by the test suite.
+The loader respects the `Collate` field from `DESCRIPTION` when ordering
+`R/*.R` files, on both full loads and incremental re-sourcing, and this
+behavior is covered by the test suite (stages 3d and 7e).
 
 This is still intentionally lightweight rather than a full reproduction of every package-loading edge case. Future changes should preserve the current `Collate` behavior without overcomplicating the package implementation.
 
@@ -124,11 +83,30 @@ This is still intentionally lightweight rather than a full reproduction of every
 - Treat `Collate` ordering for `R/*.R` as supported behavior
 - Be cautious about expanding this area unless a concrete incompatibility appears
 
-## Suggested implementation order
+### 5. Dependency invalidation forces a full reload of importers
+When a package is re-sourced (fully or incrementally), every cached package
+that imports from it — directly or transitively — is flagged, and its next
+`load_fast()` call is upgraded to a full reload (which in turn reloads flagged
+dependencies first, in dependency order). This matches `load_all()`'s cost
+model: importers always re-process imports against fresh namespaces.
 
-1. Harden incremental cache validation
-2. Store `pkg_name` in cache entries and invalidate on package identity changes
-3. Extract tiny helpers for testthat detection and package env sync if the file grows further
+A cheaper in-place refresh of importer imports envs was considered and
+rejected for now: it would have to reproduce `namespaceImportFrom()` /
+`importMethodsFrom()` merge semantics against live namespaces, which is exactly
+the class of subtle S4/S3 state this package tries not to reimplement.
+
+**Current rule**
+- Correctness first: flagged importers do a full reload; the within-package
+  incremental path remains the performance win
+
+### 6. S4 metadata helpers are inlined, not imported from methods:::
+`.loadfast.has_s4_metadata()`, `.loadfast.s4_method_tables()`, and
+`.loadfast.s4_generic_names()` replicate tiny `methods:::` internals
+(`.hasS4MetaData`, `.getGenerics`, `.TableMetaPrefix`) using the stable
+`.__C__` / `.__T__` / `.__A__` metadata naming convention. This keeps
+`R CMD check --as-cran` free of the `:::` warning. If a future R version
+changes these conventions (unlikely; they are decades old), stages 5d/6e of the
+harness will catch it.
 
 ## Notes for future reviewers
 
