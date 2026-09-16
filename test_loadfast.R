@@ -1214,6 +1214,52 @@ check("collate: consumer is visible from attached env", quote(
 ))
 
 # ============================================================================
+# STAGE 3d2: Load order does not follow LC_COLLATE
+# ============================================================================
+cat("\n--- 3d2: load order does not follow LC_COLLATE ---\n\n")
+
+tmp_d_locale <- tempfile("loadfast_s3_collate_locale_")
+copy_baseline(tmp_d_locale)
+
+writeLines(c(
+  "locale_logger <- function(x) {",
+  "  paste0(\"log:\", x)",
+  "}"
+), file.path(tmp_d_locale, "R", "utils_log.R"))
+
+# Top-level call, so it fails at source time if the files load in the wrong
+# order. glibc's en_US.UTF-8 ignores "_" at the primary level and puts
+# utils_log_instances.R first; the C order R CMD INSTALL uses puts it second.
+writeLines(
+  "LOCALE_LOGGER_INSTANCE <- locale_logger(\"instance\")",
+  file.path(tmp_d_locale, "R", "utils_log_instances.R")
+)
+
+old_collate <- Sys.getlocale("LC_COLLATE")
+if (suppressWarnings(Sys.setlocale("LC_COLLATE", "en_US.UTF-8")) == "en_US.UTF-8") {
+  ns3d2 <- tryCatch(
+    load_fast(tmp_d_locale, helpers = FALSE, attach_testthat = FALSE, full = TRUE),
+    error = function(e) e
+  )
+  collate_after <- Sys.getlocale("LC_COLLATE")
+  Sys.setlocale("LC_COLLATE", old_collate)
+
+  check("collate locale: load succeeds under en_US.UTF-8", quote(
+    !inherits(ns3d2, "error")
+  ))
+
+  check("collate locale: top-level call saw a function from a file sorting later in that locale", quote(
+    get("LOCALE_LOGGER_INSTANCE", envir = ns3d2) == "log:instance"
+  ))
+
+  check("collate locale: the caller's LC_COLLATE survives the load", quote(
+    collate_after == "en_US.UTF-8"
+  ))
+} else {
+  cat("  (skipped: en_US.UTF-8 locale unavailable)\n")
+}
+
+# ============================================================================
 # STAGE 3e: Multiple packages in one session
 # ============================================================================
 cat("\n--- 3e: multiple packages in one session ---\n\n")

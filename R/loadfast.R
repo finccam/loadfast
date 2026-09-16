@@ -148,10 +148,10 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     existing_collate_files <- unique(collate_files[file.exists(collate_files)])
     r_files_norm <- normalizePath(r_files, mustWork = TRUE)
     remaining_files <- r_files[!(r_files_norm %in% existing_collate_files)]
-    remaining_files <- remaining_files[order(basename(remaining_files))]
+    remaining_files <- .loadfast.with_c_collate(remaining_files[order(basename(remaining_files))])
     r_files <- c(existing_collate_files, remaining_files)
   } else {
-    r_files <- r_files[order(basename(r_files))]
+    r_files <- .loadfast.with_c_collate(r_files[order(basename(r_files))])
   }
   if (length(r_files) == 0L) {
     message("No R files found in ", r_dir_display, ".")
@@ -980,6 +980,21 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
     }, add = TRUE)
     testthat::source_test_helpers(test_dir, env = pkg_env)
   }
+}
+
+# pkgload pins the collation for the file listing alone (find_code() wraps it
+# in withr::local_collate("C")), leaving package code to source under the
+# user's locale; do the same here. Without it the default order() follows
+# LC_COLLATE, and glibc's en_US.UTF-8 ignores "_" and "." at the primary level
+# - enough to pull utils_log_instances.R ahead of utils_log.R and break a
+# package whose top-level code runs in install order.
+.loadfast.with_c_collate <- function(expr) {
+  old_collate <- Sys.getlocale("LC_COLLATE")
+  if (Sys.setlocale("LC_COLLATE", "C") != "C") {
+    warning("cannot turn off locale-specific sorting via LC_COLLATE", call. = FALSE)
+  }
+  on.exit(Sys.setlocale("LC_COLLATE", old_collate), add = TRUE)
+  expr
 }
 
 .loadfast.find_package_root <- function(path = ".") {
