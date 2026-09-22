@@ -1,4 +1,4 @@
-importFrom(rlang, ns_registry_env)
+importFrom(rlang, abort)
 import(methods)
 importFrom(R6, R6Class)
 importFrom(data.table,":=")

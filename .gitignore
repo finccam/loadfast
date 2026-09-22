@@ -1,2 +1,4 @@
 pkgload/
 devtools/
+loadfast_*.tar.gz
+loadfast.Rcheck/
