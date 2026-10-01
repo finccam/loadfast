@@ -46,6 +46,17 @@ automatically upgraded to a full reload so importers never keep running
 against a stale snapshot. A full reload also reloads flagged dependencies
 first, in dependency order.
 
+Before it loads \code{path}, \code{load_fast()} reloads the packages that it loaded
+earlier in the session, in the order it first loaded them, if their files
+changed. So after you edit a dependency, one \code{load_fast()} call in the
+package you work on picks up the edit.
+
+A package with a \verb{src/} directory is built with \verb{R CMD INSTALL} into a new
+temporary library, and loaded from there. This happens on the first call
+and whenever a file in \code{DESCRIPTION}, \code{NAMESPACE}, \verb{R/} or \verb{src/} changed.
+Paths that \code{.Rbuildignore} lists do not count as changes. The library of
+the previous build stays loaded, so objects that point into it stay valid.
+
 Packages listed in the \code{Depends} field of \code{DESCRIPTION} are attached to
 the search path during a full load, mirroring \code{library()} semantics.
 }

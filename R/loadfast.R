@@ -1,6 +1,8 @@
 .loadfast.cache <- new.env(parent = emptyenv())
 .loadfast.state <- new.env(parent = emptyenv())
 .loadfast.state$stack <- character(0)
+# Package paths in the order of their first full load in this session.
+.loadfast.state$loaded <- character(0)
 
 # R's namespace registry has no public API for dev loaders: the base wrappers
 # around registerNamespace/unregisterNamespace are not exported, and rlang's
@@ -41,6 +43,17 @@
 #' against a stale snapshot. A full reload also reloads flagged dependencies
 #' first, in dependency order.
 #'
+#' Before it loads `path`, `load_fast()` reloads the packages that it loaded
+#' earlier in the session, in the order it first loaded them, if their files
+#' changed. So after you edit a dependency, one `load_fast()` call in the
+#' package you work on picks up the edit.
+#'
+#' A package with a `src/` directory is built with `R CMD INSTALL` into a new
+#' temporary library, and loaded from there. This happens on the first call
+#' and whenever a file in `DESCRIPTION`, `NAMESPACE`, `R/` or `src/` changed.
+#' Paths that `.Rbuildignore` lists do not count as changes. The library of
+#' the previous build stays loaded, so objects that point into it stay valid.
+#'
 #' Packages listed in the `Depends` field of `DESCRIPTION` are attached to
 #' the search path during a full load, mirroring `library()` semantics.
 #'
@@ -70,10 +83,31 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   if (length(.loadfast.state$stack) > 0L) {
     stop("load_fast() re-entrance detected -- a sourced file is calling load_fast()")
   }
+  .loadfast.reload_earlier(.loadfast.find_package_root(path), verbose)
   .loadfast.load(path, helpers = helpers, attach_testthat = attach_testthat, full = full, verbose = verbose)
 }
 
-.loadfast.load <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full = FALSE, verbose = FALSE) {
+# The multi-package workflow loads dependencies first, so the packages loaded
+# before `abs_path` are the ones it can depend on. A package whose namespace was
+# replaced since, for example by library(), is left alone, and so is one with
+# the name of the package at `abs_path`, because loading that replaces it.
+.loadfast.reload_earlier <- function(abs_path, verbose) {
+  pkg_name <- read.dcf(file.path(abs_path, "DESCRIPTION"), fields = "Package")[1L, 1L]
+  earlier <- .loadfast.state$loaded
+  position <- match(abs_path, earlier)
+  if (!is.na(position)) earlier <- earlier[seq_len(position - 1L)]
+  for (key in earlier) {
+    if (!exists(key, envir = .loadfast.cache, inherits = FALSE) || !dir.exists(key)) next
+    entry <- .loadfast.cache[[key]]
+    if (identical(entry$pkg_name, unname(pkg_name))) next
+    if (!isNamespaceLoaded(entry$pkg_name) || !identical(asNamespace(entry$pkg_name), entry$ns_env)) next
+    .loadfast.load(key, helpers = FALSE, attach_testthat = FALSE, verbose = verbose, report_unchanged = FALSE)
+  }
+  invisible(NULL)
+}
+
+.loadfast.load <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full = FALSE, verbose = FALSE,
+                           report_unchanged = TRUE) {
   if (verbose) {
     .t0 <- proc.time()["elapsed"]
     .t_last <- .t0
@@ -118,6 +152,13 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   if (!nzchar(pkg_name)) stop("No valid 'Package' field found in DESCRIPTION")
 
   pkg_env_name <- paste0("package:", pkg_name)
+
+  if (dir.exists(file.path(abs_path, "src"))) {
+    return(.loadfast.load_compiled(
+      abs_path, pkg_name, path_display, helpers, attach_testthat, full, report_unchanged
+    ))
+  }
+
   loaded_pkg_path <- .loadfast.loaded_package_path(pkg_name)
 
   if (!is.null(loaded_pkg_path) && !identical(loaded_pkg_path, abs_path)) {
@@ -182,7 +223,10 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     message("Full reload of '", pkg_name, "': ", needs_full_reason, ".")
   }
 
+  # A package that had src/ before was installed, and R locks an installed
+  # namespace, so its files cannot be sourced into it.
   can_incremental <- !is.null(cached) &&
+    is.null(cached$library_dir) &&
     is.null(needs_full_reason) &&
     !is.null(active_ns_env) &&
     identical(cached$ns_env, active_ns_env) &&
@@ -238,7 +282,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
         registered_reload_files = character(0),
         pending_reload_message = NULL
       )
-      message("No changes in ", r_dir_display, ".")
+      if (report_unchanged) message("No changes in ", r_dir_display, ".")
       .loadfast.source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
       .timer("TOTAL (no-change)")
       return(invisible(ns_env))
@@ -594,11 +638,97 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     pending_reload_message = NULL
   )
   .loadfast.invalidate_dependents(pkg_name, abs_path)
+  .loadfast.state$loaded <- union(.loadfast.state$loaded, abs_path)
 
   full_load_ok <- TRUE
   message("Load ", length(r_files), " file(s) from ", r_dir_display, ".")
   .timer("TOTAL (full load)")
   invisible(ns_env)
+}
+
+# R runs compiled code only from a shared library that dyn.load() loaded, and
+# the operating system does not load a rebuilt library again from a path it has
+# already loaded. So every build goes into a new temporary library. The old
+# library stays loaded: unloading it would crash R when an object that still
+# points into it is used or garbage collected.
+.loadfast.load_compiled <- function(abs_path, pkg_name, path_display, helpers, attach_testthat, full,
+                                    report_unchanged) {
+  hashes <- tools::md5sum(.loadfast.build_inputs(abs_path))
+  cached <- if (exists(abs_path, envir = .loadfast.cache, inherits = FALSE)) .loadfast.cache[[abs_path]]
+  is_current <- !isTRUE(full) &&
+    !is.null(cached) &&
+    is.null(cached$needs_full) &&
+    identical(hashes, cached$hashes) &&
+    isNamespaceLoaded(pkg_name) &&
+    identical(asNamespace(pkg_name), cached$ns_env)
+
+  if (!is_current) {
+    library_dir <- .loadfast.install(abs_path, path_display)
+    .loadfast.teardown(pkg_name, abs_path)
+    library(pkg_name, lib.loc = library_dir, character.only = TRUE, warn.conflicts = FALSE)
+    if (!is.null(cached$library_dir)) unlink(cached$library_dir, recursive = TRUE)
+    ns_env <- asNamespace(pkg_name)
+    .loadfast.cache[[abs_path]] <- list(
+      ns_env = ns_env,
+      pkg_name = pkg_name,
+      hashes = hashes,
+      import_pkgs = setdiff(names(getNamespaceImports(ns_env)), "base"),
+      needs_full = NULL,
+      library_dir = library_dir
+    )
+    .loadfast.invalidate_dependents(pkg_name, abs_path)
+    .loadfast.state$loaded <- union(.loadfast.state$loaded, abs_path)
+    message("Load ", pkg_name, " from ", path_display, ", built with R CMD INSTALL.")
+  } else if (report_unchanged) {
+    message("No changes in ", path_display, ".")
+  }
+
+  pkg_env <- as.environment(paste0("package:", pkg_name))
+  .loadfast.source_helpers(abs_path, pkg_env, helpers, attach_testthat, pkg_name)
+  invisible(asNamespace(pkg_name))
+}
+
+# The build of a package with src/ streams its output, because the first build
+# of a large Rust or C++ package can take minutes.
+.loadfast.install <- function(abs_path, path_display) {
+  library_dir <- tempfile("loadfast-")
+  dir.create(library_dir)
+  # --use-vanilla keeps the child R from reading .Rprofile, which can switch
+  # libraries (renv does). R_LIBS gives it the libraries of this session instead.
+  old_r_libs <- Sys.getenv("R_LIBS", unset = NA)
+  Sys.setenv(R_LIBS = paste(.libPaths(), collapse = .Platform$path.sep))
+  on.exit(if (is.na(old_r_libs)) Sys.unsetenv("R_LIBS") else Sys.setenv(R_LIBS = old_r_libs), add = TRUE)
+  status <- system2(file.path(R.home("bin"), "R"), c(
+    "CMD", "INSTALL", "--use-vanilla", "--no-test-load", "--no-staged-install", "--no-byte-compile",
+    paste0("--library=", shQuote(library_dir)), shQuote(abs_path)
+  ))
+  if (status != 0L) {
+    unlink(library_dir, recursive = TRUE)
+    stop("R CMD INSTALL failed for ", path_display, ". Its output is above.", call. = FALSE)
+  }
+  library_dir
+}
+
+# A build directory, such as Cargo's src/rust/target/, can hold many thousands
+# of files. Paths that .Rbuildignore lists are not entered, and neither are the
+# object files and libraries that R CMD INSTALL writes into src/.
+.loadfast.build_inputs <- function(abs_path) {
+  ignore_file <- file.path(abs_path, ".Rbuildignore")
+  ignore <- c(
+    "^src/.*\\.(o|so|dll|dylib)$",
+    if (file.exists(ignore_file)) readLines(ignore_file, warn = FALSE)
+  )
+  ignore <- ignore[nzchar(trimws(ignore))]
+  is_ignored <- function(paths) {
+    Reduce(`|`, lapply(ignore, grepl, x = paths, ignore.case = TRUE, perl = TRUE), logical(length(paths)))
+  }
+  list_dir <- function(dir) {
+    paths <- file.path(dir, list.files(file.path(abs_path, dir), all.files = TRUE, no.. = TRUE))
+    paths <- paths[!is_ignored(paths)]
+    is_dir <- dir.exists(file.path(abs_path, paths))
+    c(paths[!is_dir], unlist(lapply(paths[is_dir], list_dir)))
+  }
+  file.path(abs_path, sort(c("DESCRIPTION", "NAMESPACE", list_dir("R"), list_dir("src"))))
 }
 
 #' Register one or more files for reload on the next `load_fast()` call
