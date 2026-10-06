@@ -33,13 +33,6 @@ stale cache entry, and does a full load under the new name (tested in stage 7b).
 ### Testthat detection duplication (was low priority)
 Extracted into `.loadfast.uses_testthat()` / `.loadfast.attach_testthat()`.
 
-## Remaining low-priority debt
-
-### Package env sync logic is duplicated conceptually
-The full-load and incremental-load paths both bulk-copy namespace and imports
-into the attached package env. The duplication is reasonable, but it is a
-maintenance seam. Optionally extract a small helper if the file grows further.
-
 ## Conscious tradeoffs, not bugs
 
 These should not be "fixed" casually unless the project goals change.
