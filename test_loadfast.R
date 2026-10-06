@@ -2460,6 +2460,36 @@ check("xpkg-s4: consumer dispatches an imported primitive-generic S4 method", qu
     get("count_teeth", envir = s4cons_load)(c(3, 5, 7)) == 3
 ))
 
+# --- 5e: an S4 generic on an imported function is not shadowed by the import ---
+cat("\n--- 5e: S4 method on an imported function ---\n\n")
+
+tmp_s4imp <- tempfile("loadfast_s4imp_")
+write_pkg(
+  tmp_s4imp, "s4imp",
+  desc_extra = character(0),
+  ns_lines = c("import(methods)", "importFrom(stats, median)"),
+  r_files = list("a.R" = c(
+    "setClass(\"Widget\", representation(sizes = \"numeric\"))",
+    "setMethod(\"median\", \"Widget\", function(x, na.rm = FALSE, ...) \"widget-median\")"
+  ))
+)
+load_fast(tmp_s4imp, helpers = FALSE, attach_testthat = FALSE)
+
+check("s4-import: attached env holds the package's S4 generic, not the import", quote(
+  is(get("median", envir = as.environment("package:s4imp"), inherits = FALSE), "standardGeneric")
+))
+
+check("s4-import: call from the search path dispatches to the S4 method", quote(
+  identical(median(new("Widget", sizes = 1)), "widget-median")
+))
+
+cat("# touched\n", file = file.path(tmp_s4imp, "R", "a.R"), append = TRUE)
+load_fast(tmp_s4imp, helpers = FALSE, attach_testthat = FALSE)
+
+check("s4-import: incremental reload keeps the S4 generic on the search path", quote(
+  identical(median(new("Widget", sizes = 1)), "widget-median")
+))
+
 # ============================================================================
 # STAGE 6: Multi-package dependency invalidation and convergence
 #   When a package is reloaded, cached packages that import from it (directly

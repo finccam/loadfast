@@ -259,8 +259,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
     .loadfast.register_s3(s3_methods_matrix, pkg_name, ns_env, reset = TRUE)
     .timer("incr S3 re-registration")
 
-    list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
-    list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
+    .loadfast.populate_pkg_env(pkg_env, ns_env)
     .timer("incr pkg_env sync")
 
     .loadfast.cache[[abs_path]] <- list(
@@ -567,8 +566,7 @@ load_fast <- function(path = ".", helpers = TRUE, attach_testthat = NULL, full =
   .timer(".onLoad")
 
   pkg_env <- attach(NULL, name = pkg_env_name)
-  list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
-  list2env(as.list(impenv, all.names = TRUE), envir = pkg_env)
+  .loadfast.populate_pkg_env(pkg_env, ns_env)
   .timer("attach pkg to search path")
 
   # `.onAttach` is an attach-time hook (search-path attachment happens only on a
@@ -815,6 +813,17 @@ load_fast_register_reload <- function(path = ".", files, reason = NULL) {
     return(invisible(NULL))
   }
   registerS3methods(s3_methods, pkg_name, ns_env)
+  invisible(NULL)
+}
+
+# The imports are copied first, so that the package's own objects overwrite
+# them, as in load_all(). A name can be in both envs. For example, `setMethod()`
+# on an imported plain function such as data.table's `as.data.table` creates an
+# S4 generic of the same name in the namespace. Only that generic calls the
+# S4 method.
+.loadfast.populate_pkg_env <- function(pkg_env, ns_env) {
+  list2env(as.list(parent.env(ns_env), all.names = TRUE), envir = pkg_env)
+  list2env(as.list(ns_env, all.names = FALSE), envir = pkg_env)
   invisible(NULL)
 }
 
