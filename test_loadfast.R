@@ -2580,8 +2580,12 @@ check("inv-chain: transitive importer is flagged too", quote(
   any(grepl("Full reload of 'invtop'", inv_c_reload$messages))
 ))
 
+# load_fast() reloads the earlier-loaded invuser before it starts on invtop.
 check("inv-chain: flagged middle dependency is reloaded first", quote(
-  any(grepl("Reloading dependency 'invuser' first", inv_c_reload$messages))
+  isTRUE(
+    grep("Full reload of 'invuser'", inv_c_reload$messages)[1L] <
+      grep("Full reload of 'invtop'", inv_c_reload$messages)[1L]
+  )
 ))
 
 check("inv-chain: one load of the top package converges the whole chain", quote(
@@ -2962,6 +2966,147 @@ verbose_nochange <- capture_messages(
 
 check("verbose: no-change load emits timing summary", quote(
   any(grepl("TOTAL (no-change)", verbose_nochange$messages, fixed = TRUE))
+))
+
+# ============================================================================
+# STAGE 8: Packages with compiled code, and reloading earlier-loaded packages
+# ============================================================================
+cat("\n--- Stage 8: compiled code and earlier-loaded packages ---\n\n")
+
+write_c_answer <- function(root, value) {
+  dir.create(file.path(root, "src"), showWarnings = FALSE)
+  writeLines(c(
+    "#include <R.h>",
+    "#include <Rinternals.h>",
+    "#include <R_ext/Rdynload.h>",
+    paste0("SEXP c_answer(void) { return Rf_ScalarInteger(", value, "); }"),
+    "static const R_CallMethodDef calls[] = {{\"c_answer\", (DL_FUNC) &c_answer, 0}, {NULL, NULL, 0}};",
+    "void R_init_cpkg(DllInfo *dll) {",
+    "  R_registerRoutines(dll, NULL, calls, NULL, NULL);",
+    "  R_useDynamicSymbols(dll, FALSE);",
+    "}"
+  ), file.path(root, "src", "answer.c"))
+}
+
+# --- 8a: a package with src/ is built, loaded, and rebuilt on change ---
+cat("\n--- 8a: compiled package ---\n\n")
+
+tmp_cpkg <- tempfile("loadfast_cpkg_")
+write_pkg(
+  tmp_cpkg, "cpkg",
+  desc_extra = character(0),
+  ns_lines = c("useDynLib(cpkg, .registration = TRUE)", "export(answer)"),
+  r_files = list("answer.R" = "answer <- function() .Call(c_answer)")
+)
+write_c_answer(tmp_cpkg, 42)
+writeLines("^src/build$", file.path(tmp_cpkg, ".Rbuildignore"))
+
+cpkg_first <- capture_messages(load_fast(tmp_cpkg, helpers = FALSE, attach_testthat = FALSE))
+
+check("compiled: first load builds and loads the compiled code", quote(
+  any(grepl("built with R CMD INSTALL", cpkg_first$messages, fixed = TRUE)) &&
+    getExportedValue("cpkg", "answer")() == 42L
+))
+
+cpkg_same <- capture_messages(load_fast(tmp_cpkg, helpers = FALSE, attach_testthat = FALSE))
+
+check("compiled: unchanged package is not rebuilt", quote(
+  any(grepl("No changes in", cpkg_same$messages, fixed = TRUE)) &&
+    !any(grepl("built with R CMD INSTALL", cpkg_same$messages, fixed = TRUE))
+))
+
+dir.create(file.path(tmp_cpkg, "src", "build"))
+writeLines("output", file.path(tmp_cpkg, "src", "build", "artifact.txt"))
+cpkg_ignored <- capture_messages(load_fast(tmp_cpkg, helpers = FALSE, attach_testthat = FALSE))
+
+check("compiled: files under a .Rbuildignore path do not trigger a rebuild", quote(
+  !any(grepl("built with R CMD INSTALL", cpkg_ignored$messages, fixed = TRUE))
+))
+
+write_c_answer(tmp_cpkg, 43)
+invisible(capture_messages(load_fast(tmp_cpkg, helpers = FALSE, attach_testthat = FALSE)))
+
+check("compiled: a changed C file is rebuilt and the new code runs", quote(
+  getExportedValue("cpkg", "answer")() == 43L
+))
+
+writeLines("answer <- function() .Call(c_answer) + 1L", file.path(tmp_cpkg, "R", "answer.R"))
+invisible(capture_messages(load_fast(tmp_cpkg, helpers = FALSE, attach_testthat = FALSE)))
+
+check("compiled: a changed R file in a compiled package is picked up", quote(
+  getExportedValue("cpkg", "answer")() == 44L
+))
+
+writeLines("this is not C", file.path(tmp_cpkg, "src", "broken.c"))
+cpkg_broken <- tryCatch(
+  load_fast(tmp_cpkg, helpers = FALSE, attach_testthat = FALSE),
+  error = function(e) conditionMessage(e)
+)
+
+check("compiled: a failed build stops with an error", quote(
+  grepl("R CMD INSTALL failed", cpkg_broken, fixed = TRUE)
+))
+
+check("compiled: a failed build keeps the previous build loaded", quote(
+  getExportedValue("cpkg", "answer")() == 44L
+))
+unlink(file.path(tmp_cpkg, "src", "broken.c"))
+
+# --- 8b: load_fast() reloads changed packages that were loaded earlier ---
+cat("\n--- 8b: earlier-loaded packages ---\n\n")
+
+tmp_early <- tempfile("loadfast_early_")
+tmp_late <- tempfile("loadfast_late_")
+write_pkg(
+  tmp_early, "earlypkg",
+  desc_extra = character(0),
+  ns_lines = "export(early_value)",
+  r_files = list("a.R" = 'early_value <- function() "one"')
+)
+write_pkg(
+  tmp_late, "latepkg",
+  desc_extra = character(0),
+  ns_lines = "export(late_value)",
+  r_files = list("b.R" = 'late_value <- function() paste0("late:", earlypkg::early_value())')
+)
+invisible(load_fast(tmp_early, helpers = FALSE, attach_testthat = FALSE))
+invisible(load_fast(tmp_late, helpers = FALSE, attach_testthat = FALSE))
+
+writeLines('early_value <- function() "two"', file.path(tmp_early, "R", "a.R"))
+late_reload <- capture_messages(load_fast(tmp_late, helpers = FALSE, attach_testthat = FALSE))
+
+check("earlier: loading a later package reloads the changed earlier package", quote(
+  getExportedValue("latepkg", "late_value")() == "late:two"
+))
+
+late_same <- capture_messages(load_fast(tmp_late, helpers = FALSE, attach_testthat = FALSE))
+
+check("earlier: unchanged earlier packages report nothing", quote(
+  sum(grepl("No changes in", late_same$messages, fixed = TRUE)) == 1L
+))
+
+writeLines('late_value <- function() "changed"', file.path(tmp_late, "R", "b.R"))
+invisible(capture_messages(load_fast(tmp_early, helpers = FALSE, attach_testthat = FALSE)))
+
+check("earlier: loading an earlier package does not reload later ones", quote(
+  getExportedValue("latepkg", "late_value")() == "late:two"
+))
+
+write_c_answer(tmp_cpkg, 45)
+invisible(capture_messages(load_fast(tmp_late, helpers = FALSE, attach_testthat = FALSE)))
+
+check("earlier: a changed compiled package is rebuilt when a later package loads", quote(
+  getExportedValue("cpkg", "answer")() == 46L
+))
+
+unlink(file.path(tmp_cpkg, "src"), recursive = TRUE)
+writeLines("export(answer)", file.path(tmp_cpkg, "NAMESPACE"))
+writeLines("answer <- function() 99L", file.path(tmp_cpkg, "R", "answer.R"))
+cpkg_plain <- capture_messages(load_fast(tmp_cpkg, helpers = FALSE, attach_testthat = FALSE))
+
+check("compiled: a package that loses src/ gets a full load from source", quote(
+  any(grepl("Load 1 file(s) from", cpkg_plain$messages, fixed = TRUE)) &&
+    getExportedValue("cpkg", "answer")() == 99L
 ))
 
 # ============================================================================

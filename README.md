@@ -88,8 +88,11 @@ snapshot taken at its own load time. `load_fast()` tracks these relationships:
   In a chain `C -> B -> A`, editing and reloading `A` followed by a single
   `load_fast()` of `C` rebuilds `B` and `C` against the fresh namespaces.
 
-So the workflow is simply: reload the package you edited, then reload whatever
-package you are working in — everything in between converges automatically.
+You do not even need the first step. Before `load_fast()` loads a package, it
+reloads the packages that it loaded earlier in the session, in the order it
+first loaded them, if their files changed. So the workflow is: load each
+package once, dependencies first. After that, edit any of them and call
+`load_fast()` in the package you work on.
 
 Reloading a dependency that other loaded packages import cannot use
 `unloadNamespace()` (R refuses to unload an imported namespace); `load_fast()`
@@ -99,6 +102,27 @@ class is imported elsewhere.
 
 > Earlier versions failed here with `Error: object 'lazydata' not found` when a
 > loaded package was accessed with `::`. That is fixed.
+
+## Packages with compiled code
+
+`load_fast()` also loads a package with a `src/` directory, for example C,
+C++ or Rust code. R runs compiled code only from a shared library, and the
+operating system does not load a rebuilt library again from a path that is
+already loaded. So `load_fast()` builds the package with `R CMD INSTALL` into a
+new temporary library, and loads it from there with `library()`. It streams the
+build output.
+
+The build runs on the first call and whenever a file in `DESCRIPTION`,
+`NAMESPACE`, `R/` or `src/` changed. Paths that `.Rbuildignore` lists do not
+count. List build directories there, such as Cargo's `^src/rust/target$`, so
+that `load_fast()` does not hash their files on every call. The make and cargo
+caches in `src/` make a rebuild after a small change fast.
+
+`load_fast()` does not unload the library of the previous build. Objects that
+point into it keep working, and they keep running the old code. The package's
+functions run the new code, as long as they call native code through
+registered routines (`useDynLib(pkg, .registration = TRUE)`). A call by name,
+such as `.Call("fn", PACKAGE = "pkg")`, can keep running the old code.
 
 ## Editor setup
 
@@ -143,11 +167,12 @@ You can bind `loadfast::load_fast()` in the Zed keymap:
 
 Testing happens at two levels:
 
-1. **Behavioral harness** (`test_loadfast.R`): ~300 checks across seven stages
+1. **Behavioral harness** (`test_loadfast.R`): ~300 checks across eight stages
    covering full loads, incremental reloads, cross-file and cross-package
-   dependencies, S3/S4/R6 fidelity, multi-package dependency invalidation, and
+   dependencies, S3/S4/R6 fidelity, multi-package dependency invalidation,
    production hardening (failed-load recovery, rename-in-place, `Depends`
-   attachment, `Collate` ordering, re-entrance).
+   attachment, `Collate` ordering, re-entrance), and packages with compiled
+   code. Stage 8 needs a C compiler.
 2. **`testthat` suite** (`tests/testthat/`): self-contained smoke and error-path
    tests that run against the *installed* package during `R CMD check`.
 

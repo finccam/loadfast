@@ -101,6 +101,22 @@ the class of subtle S4/S3 state this package tries not to reimplement.
 changes these conventions (unlikely; they are decades old), stages 5d/6e of the
 harness will catch it.
 
+### 7. A rebuilt compiled package leaves the old library loaded
+Each build of a package with `src/` goes into a new temporary library, and the
+previous library is never unloaded. Unloading it would crash R as soon as an
+external pointer from the old build is used or finalized. The price: every
+build stays mapped until R exits, and a native call by name
+(`.Call("fn", PACKAGE = "pkg")`) can resolve to the old library through R's
+symbol cache. Calls through registered routines, which savvy, extendr and
+current Rcpp generate, always reach the new library.
+
+A whole `R CMD INSTALL` per change is also slower than compiling `src/` and
+sourcing `R/` the way `pkgload` does. For packages whose time goes into the
+compiler, the difference is a few seconds.
+
+**Current rule**
+- Restart R if a session has rebuilt a large compiled package many times
+
 ## Notes for future reviewers
 
 - Most of the implementation complexity is justified by R namespace machinery, especially S4 behavior and imports metadata shape.
